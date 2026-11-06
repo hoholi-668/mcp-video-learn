@@ -25,6 +25,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { normalizeBiliUrl, fmtDuration, subtitlesToText, gridFor, pickVideoFile } from './lib.js';
 import { guessKind, pickFrames, gridForFrames, tileFilter, isUnderRoots, isDirectMediaUrl, describeProbe } from './media.js';
+import { pickTimestamps } from './filmstrip.js';
 
 const YTDLP = process.env.VIDEO_YTDLP || 'yt-dlp';
 const FFMPEG = process.env.VIDEO_FFMPEG || 'ffmpeg';
@@ -152,7 +153,75 @@ async function resolveMedia(input, dir) {
   return { ok: true, file: abs, source: 'local' };
 }
 
-const server = new McpServer({ name: 'video-learn', version: '0.2.0' });
+/**
+ * 用 ffmpeg 的场景检测拿到「画面发生明显变化」的时间点。
+ * 解析 stderr 里的 showinfo 行（pts_time），失败就返回空数组走均匀采样。
+ */
+async function sceneCandidates(file, { minScore = 0.25, timeoutMs = 180_000 } = {}) {
+  const res = await run(FFMPEG, [
+    '-v', 'info', '-i', file,
+    '-vf', `select='gt(scene,${minScore})',showinfo`,
+    '-an', '-f', 'null', '-'
+  ], timeoutMs);
+  const out = [];
+  const re = /pts_time:([0-9]+(?:\.[0-9]+)?)/g;
+  let m;
+  const text = String(res.stderr || '');
+  while ((m = re.exec(text)) !== null) {
+    const t = Number(m[1]);
+    if (Number.isFinite(t)) out.push({ t, score: minScore });
+  }
+  // 去重 + 升序（同一秒内的重复点没有意义）
+  const seen = new Set();
+  return out.filter((c) => {
+    const k = c.t.toFixed(2);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).sort((a, b) => a.t - b.t);
+}
+
+/**
+ * 从视频里生成一张帧网格。
+ *
+ * 默认走「场景变化 → FIFO 队列」这条路：
+ *   只有画面真正变化才入队，队列满了淘汰最旧的，最终快照覆盖最有代表性的瞬间。
+ * 拿不到场景检测结果时，退回均匀采样（老的 fps 方案）。
+ *
+ * @returns {{ok:boolean, outJpg?:string, mode?:string, timestamps?:number[], error?:string}}
+ */
+async function buildVideoGrid({ file, want, tileWidth, strategy, dir }) {
+  const candidates = await sceneCandidates(file);
+  const times = pickTimestamps(candidates, want, strategy);
+  const outJpg = path.join(dir, 'grid.jpg');
+
+  if (times.length >= Math.min(2, want)) {
+    // 按选中的时间点精确抓帧：一次 ffmpeg，select 里用 between 命中每个时间点
+    const terms = times
+      .map((t) => `between(t,${Math.max(0, t - 0.02).toFixed(3)},${(t + 0.02).toFixed(3)})`)
+      .join('+');
+    const vf = `select='${terms}',${tileFilter({ cols: gridForFrames(want).cols, rows: gridForFrames(want).rows }, { tileWidth })}`;
+    const ff = await run(FFMPEG, ['-v', 'error', '-y', '-i', file, '-vf', vf, '-fps_mode', 'vfr', '-frames:v', '1', '-q:v', '4', outJpg]);
+    if (ff.ok && fs.existsSync(outJpg)) {
+      return { ok: true, outJpg, mode: 'scene', timestamps: times };
+    }
+  }
+
+  // 退回均匀采样
+  const probe = await probeMedia(file);
+  const meta = describeProbe(probe);
+  const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
+  const grid = gridForFrames(want);
+  const vf = duration > 0.05
+    ? `fps=${Math.max(0.01, Math.min(30, want / duration)).toFixed(4)},${tileFilter(grid, { tileWidth })}`
+    : tileFilter(grid, { tileWidth });
+  const ff = await run(FFMPEG, ['-v', 'error', '-y', '-i', file, '-vf', vf, '-frames:v', '1', '-q:v', '4', outJpg]);
+  return ff.ok && fs.existsSync(outJpg)
+    ? { ok: true, outJpg, mode: 'uniform', timestamps: [] }
+    : { ok: false, error: ff.stderr?.slice(0, 200) || 'ffmpeg 无输出' };
+}
+
+const server = new McpServer({ name: 'video-learn', version: '0.3.0' });
 
 server.tool(
   'bili_video_info',
@@ -281,9 +350,11 @@ server.tool(
   {
     input: z.string().describe('本地路径、媒体直链（.gif/.webp/.mp4…）或 B 站链接'),
     frames: z.number().int().min(1).max(12).optional().describe('抽几帧；动图默认 6，视频默认 9'),
-    tileWidth: z.number().int().min(64).max(640).optional().describe('每帧宽度（像素），默认 240')
+    tileWidth: z.number().int().min(64).max(640).optional().describe('每帧宽度（像素），默认 240'),
+    strategy: z.enum(['overview', 'recent']).optional()
+      .describe('视频取帧策略：overview 均匀覆盖全程（默认）；recent 取最近 N 个变化瞬间（FIFO 队列快照）')
   },
-  async ({ input, frames, tileWidth }) => {
+  async ({ input, frames, tileWidth, strategy }) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-learn-'));
     try {
       const resolved = await resolveMedia(input, dir);
@@ -294,34 +365,42 @@ server.tool(
       const grid = gridForFrames(want);
 
       const probe = await probeMedia(resolved.file);
-      const meta = describeProbe(probe);
       if (!probe) return { content: [{ type: 'text', text: '失败：ffprobe 读不出这个文件（可能不是媒体）' }], isError: true };
+      const meta = describeProbe(probe);
 
-      if (meta.still && want > 1) {
-        // 静态图没必要拼网格，直接当一帧
+      let outJpg = path.join(dir, 'grid.jpg');
+      let mode = 'uniform';
+      let timestamps = [];
+
+      if (kind === 'video') {
+        // 视频：走「场景变化 → FIFO 队列」这条主路，拿不到变化点再退回均匀采样
+        const built = await buildVideoGrid({ file: resolved.file, want, tileWidth, strategy: strategy ?? 'overview', dir });
+        if (!built.ok) return { content: [{ type: 'text', text: `抽帧失败：${built.error}` }], isError: true };
+        outJpg = built.outJpg;
+        mode = built.mode;
+        timestamps = built.timestamps || [];
+      } else {
+        // 动图/静态图：按时长均匀铺满（动图本身就是一个短循环，均匀采样最合适）
+        const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
+        const vf = duration > 0.05
+          ? `fps=${Math.max(0.01, Math.min(30, want / duration)).toFixed(4)},${tileFilter(grid, { tileWidth })}`
+          : `select='not(mod(n\\,${Math.max(1, Math.round((meta.frames || want) / want))}))',${tileFilter(grid, { tileWidth })}`;
+        const ff = await run(FFMPEG, ['-v', 'error', '-y', '-i', resolved.file, '-vf', vf, '-frames:v', '1', '-q:v', '4', outJpg]);
+        if (!ff.ok || !fs.existsSync(outJpg)) {
+          return { content: [{ type: 'text', text: `抽帧失败：${ff.stderr?.slice(0, 200) || 'ffmpeg 无输出'}` }], isError: true };
+        }
       }
 
-      const outJpg = path.join(dir, 'grid.jpg');
-      const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
-      // 有明确时长 → 用 fps 均匀铺满；没有（很短的动图/单帧）→ 用 select 每 N 帧抽一张
-      const vf = duration > 0.05
-        ? `fps=${Math.max(0.01, Math.min(30, want / duration)).toFixed(4)},${tileFilter(grid, { tileWidth })}`
-        : `select='not(mod(n\\,${Math.max(1, Math.round((meta.frames || want) / want))}))',${tileFilter(grid, { tileWidth })}`;
-
-      const ff = await run(FFMPEG, [
-        '-v', 'error', '-y', '-i', resolved.file,
-        '-vf', vf, '-frames:v', '1', '-q:v', '4', outJpg
-      ]);
-      audit({ tool: 'media_frames', source: resolved.source, kind, ok: ff.ok, frames: want });
-      if (!ff.ok || !fs.existsSync(outJpg)) {
-        return { content: [{ type: 'text', text: `抽帧失败：${ff.stderr?.slice(0, 200) || 'ffmpeg 无输出'}` }], isError: true };
-      }
+      audit({ tool: 'media_frames', source: resolved.source, kind, ok: true, frames: want, mode });
 
       const header = [
         `来源：${resolved.source}${resolved.source === 'local' ? `（${path.basename(resolved.file)}）` : ''}`,
         `类型：${kind}${meta.animated ? '（动图/视频）' : meta.still ? '（静态图）' : ''}`,
         `尺寸：${meta.width}×${meta.height}${meta.frames ? ` · 共 ${meta.frames} 帧` : ''}${meta.durationSec ? ` · ${meta.durationSec} 秒` : ''}`,
-        `画面：已抽 ${want} 帧拼成 ${grid.cols}×${grid.rows} 网格（行优先 左上→右下）`
+        `画面：${want} 帧拼成 ${grid.cols}×${grid.rows} 网格（行优先 左上→右下）`,
+        mode === 'scene'
+          ? `取帧：场景变化检测（${strategy === 'recent' ? 'FIFO 队列最近窗口' : '全程均匀覆盖'}），命中 ${timestamps.length} 个变化点`
+          : '取帧：均匀采样（没有检测到明显的场景切换）'
       ].join('\n');
 
       return {

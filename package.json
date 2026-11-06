@@ -1,6 +1,6 @@
 {
   "name": "mcp-video-learn",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server that lets an LLM actually watch videos and animated stickers: metadata, frame grids, subtitles.",
   "license": "MIT",
   "type": "module",
