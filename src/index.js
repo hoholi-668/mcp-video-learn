@@ -24,6 +24,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { normalizeBiliUrl, fmtDuration, subtitlesToText, gridFor, pickVideoFile } from './lib.js';
+import { guessKind, pickFrames, gridForFrames, tileFilter, isUnderRoots, isDirectMediaUrl, describeProbe } from './media.js';
 
 const YTDLP = process.env.VIDEO_YTDLP || 'yt-dlp';
 const FFMPEG = process.env.VIDEO_FFMPEG || 'ffmpeg';
@@ -34,6 +35,13 @@ const AUDIT = process.env.VIDEO_AUDIT
 const MAX_DOWNLOAD_MB = Math.max(1, Number(process.env.VIDEO_MAX_MB) || 60);
 const MAX_DOWNLOAD = MAX_DOWNLOAD_MB * 1024 * 1024;
 const STEP_TIMEOUT_MS = 120_000;
+
+// 本地文件白名单：默认当前目录 + 临时目录，可用 VIDEO_ALLOW_ROOTS 追加（用路径分隔符隔开）。
+const ALLOW_ROOTS = [
+  process.cwd(),
+  os.tmpdir(),
+  ...String(process.env.VIDEO_ALLOW_ROOTS || '').split(path.delimiter).filter(Boolean)
+];
 
 function audit(entry) {
   try {
@@ -81,7 +89,70 @@ function ytdlpArgs(extra = []) {
   return [...args, ...extra];
 }
 
-const server = new McpServer({ name: 'video-learn', version: '0.1.0' });
+/** ffprobe 出 JSON（流 + 容器信息）。 */
+async function probeMedia(file) {
+  const res = await run(FFMPEG.replace(/ffmpeg(\.exe)?$/i, (m) => m.replace(/ffmpeg/i, 'ffprobe')), [
+    '-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', file
+  ]);
+  if (!res.ok) return null;
+  try { return JSON.parse(res.stdout); } catch { return null; }
+}
+
+/** 把直链下载到临时文件（限制体积，避免变成通用下载器）。 */
+async function downloadDirect(url, dir) {
+  const res = await fetch(url, { redirect: 'follow' });
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+  const len = Number(res.headers.get('content-length') || 0);
+  if (len > MAX_DOWNLOAD) return { ok: false, error: `文件太大（${Math.round(len / 1024 / 1024)}MB > ${MAX_DOWNLOAD_MB}MB）` };
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of res.body) {
+    total += chunk.length;
+    if (total > MAX_DOWNLOAD) return { ok: false, error: `下载超限（>${MAX_DOWNLOAD_MB}MB）` };
+    chunks.push(chunk);
+  }
+  const ext = path.extname(new URL(url).pathname) || '.bin';
+  const file = path.join(dir, `direct${ext}`);
+  fs.writeFileSync(file, Buffer.concat(chunks));
+  return { ok: true, file };
+}
+
+/**
+ * 把三种输入统一成「本地可读的媒体文件」：
+ *   · B 站链接 → yt-dlp 下 480p
+ *   · 直接媒体直链 → fetch（限体积）
+ *   · 本地路径 → 必须落在白名单目录内
+ */
+async function resolveMedia(input, dir) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return { ok: false, error: '空输入' };
+
+  if (/^https?:\/\//i.test(raw)) {
+    if (normalizeBiliUrl(raw)) {
+      const dlDir = path.join(dir, 'dl');
+      fs.mkdirSync(dlDir, { recursive: true });
+      const dl = await run(YTDLP, ytdlpArgs([
+        '-f', 'bv*[height<=480]+ba/b[height<=480]/worst',
+        '--max-filesize', String(MAX_DOWNLOAD),
+        '-o', path.join(dlDir, 'media.%(ext)s'), raw
+      ]), 180_000);
+      if (!dl.ok) return { ok: false, error: `B 站下载失败：${dl.stderr.slice(0, 200)}` };
+      const names = fs.readdirSync(dlDir).map((n) => path.join(dlDir, n));
+      const file = pickVideoFile(names);
+      return file ? { ok: true, file, source: 'bilibili' } : { ok: false, error: '下载后没找到视频文件' };
+    }
+    if (!isDirectMediaUrl(raw)) return { ok: false, error: '拒绝：只支持 B 站链接或 .gif/.webp/.mp4 这类媒体直链' };
+    const got = await downloadDirect(raw, dir);
+    return got.ok ? { ok: true, file: got.file, source: 'direct' } : { ok: false, error: got.error };
+  }
+
+  const abs = path.resolve(raw);
+  if (!isUnderRoots(abs, ALLOW_ROOTS)) return { ok: false, error: `拒绝：本地路径不在白名单目录内（${ALLOW_ROOTS.join(' , ')}）` };
+  if (!fs.existsSync(abs)) return { ok: false, error: `文件不存在：${abs}` };
+  return { ok: true, file: abs, source: 'local' };
+}
+
+const server = new McpServer({ name: 'video-learn', version: '0.2.0' });
 
 server.tool(
   'bili_video_info',
@@ -190,6 +261,68 @@ server.tool(
           : '字幕：没有拿到（B 站 AI 字幕通常需要登录 cookies；纯语音内容会缺失）',
         subtitleText ? `\n【字幕全文】\n${subtitleText}` : ''
       ].filter(Boolean).join('\n');
+
+      return {
+        content: [
+          { type: 'text', text: header },
+          { type: 'image', data: fs.readFileSync(outJpg).toString('base64'), mimeType: 'image/jpeg' }
+        ]
+      };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+);
+
+server.tool(
+  'media_frames',
+  '把任意“动的东西”变成模型能看懂的帧网格：本地 GIF/WebP/视频、媒体直链、或 B 站链接。'
+  + '适合识别动图表情包、看短视频、检查本地素材。返回元信息（尺寸/帧数/时长）+ 一张网格图。',
+  {
+    input: z.string().describe('本地路径、媒体直链（.gif/.webp/.mp4…）或 B 站链接'),
+    frames: z.number().int().min(1).max(12).optional().describe('抽几帧；动图默认 6，视频默认 9'),
+    tileWidth: z.number().int().min(64).max(640).optional().describe('每帧宽度（像素），默认 240')
+  },
+  async ({ input, frames, tileWidth }) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-learn-'));
+    try {
+      const resolved = await resolveMedia(input, dir);
+      if (!resolved.ok) return { content: [{ type: 'text', text: `失败：${resolved.error}` }], isError: true };
+
+      const kind = guessKind(resolved.file);
+      const want = pickFrames(kind, frames);
+      const grid = gridForFrames(want);
+
+      const probe = await probeMedia(resolved.file);
+      const meta = describeProbe(probe);
+      if (!probe) return { content: [{ type: 'text', text: '失败：ffprobe 读不出这个文件（可能不是媒体）' }], isError: true };
+
+      if (meta.still && want > 1) {
+        // 静态图没必要拼网格，直接当一帧
+      }
+
+      const outJpg = path.join(dir, 'grid.jpg');
+      const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
+      // 有明确时长 → 用 fps 均匀铺满；没有（很短的动图/单帧）→ 用 select 每 N 帧抽一张
+      const vf = duration > 0.05
+        ? `fps=${Math.max(0.01, Math.min(30, want / duration)).toFixed(4)},${tileFilter(grid, { tileWidth })}`
+        : `select='not(mod(n\\,${Math.max(1, Math.round((meta.frames || want) / want))}))',${tileFilter(grid, { tileWidth })}`;
+
+      const ff = await run(FFMPEG, [
+        '-v', 'error', '-y', '-i', resolved.file,
+        '-vf', vf, '-frames:v', '1', '-q:v', '4', outJpg
+      ]);
+      audit({ tool: 'media_frames', source: resolved.source, kind, ok: ff.ok, frames: want });
+      if (!ff.ok || !fs.existsSync(outJpg)) {
+        return { content: [{ type: 'text', text: `抽帧失败：${ff.stderr?.slice(0, 200) || 'ffmpeg 无输出'}` }], isError: true };
+      }
+
+      const header = [
+        `来源：${resolved.source}${resolved.source === 'local' ? `（${path.basename(resolved.file)}）` : ''}`,
+        `类型：${kind}${meta.animated ? '（动图/视频）' : meta.still ? '（静态图）' : ''}`,
+        `尺寸：${meta.width}×${meta.height}${meta.frames ? ` · 共 ${meta.frames} 帧` : ''}${meta.durationSec ? ` · ${meta.durationSec} 秒` : ''}`,
+        `画面：已抽 ${want} 帧拼成 ${grid.cols}×${grid.rows} 网格（行优先 左上→右下）`
+      ].join('\n');
 
       return {
         content: [

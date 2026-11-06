@@ -1,7 +1,7 @@
 {
   "name": "mcp-video-learn",
-  "version": "0.1.0",
-  "description": "MCP server that lets an LLM actually watch a Bilibili video: metadata, a 3x3 frame grid, and subtitles when available.",
+  "version": "0.2.0",
+  "description": "MCP server that lets an LLM actually watch videos and animated stickers: metadata, frame grids, subtitles.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -23,11 +23,13 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
-    "bilibili",
     "video",
-    "llm",
+    "bilibili",
+    "gif",
+    "animated-sticker",
     "ffmpeg",
-    "yt-dlp"
+    "yt-dlp",
+    "llm"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
