@@ -1,44 +1,74 @@
 # mcp-video-learn
 
-让大模型**真的“看”**视频和动图：元信息、画面抽帧、字幕。
+> 让大模型**真的“看”**视频和动图：画面抽帧 + 字幕 + 一张网格图。
 
-> 为什么需要这个：模型只能读文本和图片。视频、GIF 表情包在它眼里只是一串文件。
-> 这个 MCP 把它们变成模型能吃的东西——**一串按时间抽出的画面 + 文本**。
+模型只认识文本和图片。你丢给它一个视频链接，它通常只能读到网页标题；丢给它一个表情包，
+它只看到一串文件名。这个 MCP 服务把「视频 / 动图 / 图片」统一变成**模型一次就能读完的东西**：
+一张按时间抽帧拼成的网格图，加上能拿到的字幕文本。
 
-## 它做什么
+---
 
-| 工具 | 作用 | 输入 |
+## 它提供三个工具
+
+| 工具 | 做什么 | 输入 |
 |---|---|---|
 | `bili_video_info` | 只看元信息，不下载 | B 站链接 |
-| `bili_video_watch` | 看 B 站视频：画面抽帧 + 字幕 | B 站链接 |
-| **`media_frames`** | **看任意动的东西**：本地 GIF/WebP/视频、媒体直链、B 站 | 路径 / 直链 / B 站 |
-
-**典型用法**：
+| `bili_video_watch` | 看 B 站视频：下载 → 抽帧 → 字幕 | B 站链接 |
+| `media_frames` | 看**任意**动的东西：本地文件 / 直链 / B 站 | 路径、URL、B 站链接 |
 
 ```
 判断值不值得看 → bili_video_info
-看视频内容     → bili_video_watch
+看视频讲什么   → bili_video_watch
 识别表情包     → media_frames("C:/stickers/怼脸.gif")
 看视频结尾     → media_frames("D:/clips/live.mp4", strategy="recent")
 ```
+
+---
+
+## 30 秒上手
+
+```bash
+# 1. 依赖：ffmpeg 必须在 PATH 里
+ffmpeg -version
+
+# 2. 安装
+npm install -g mcp-video-learn
+
+# 3. 接到你的 MCP 客户端（以 DSH 为例）
+```
+
+```yaml
+- id: mcp-video-learn
+  name: '@deepseek-ai/dsh-mcp'
+  config:
+    command: npx
+    args: ['-y', 'mcp-video-learn']
+    env:
+      VIDEO_FFMPEG: /usr/bin/ffmpeg
+```
+
+> 其它客户端（Claude Desktop 等）同理：`command` + `args` 指向本服务即可。
+
+---
 
 ## 支持哪些格式（先看这张表）
 
 | 格式 | 能不能看 | 需要额外装东西吗 |
 |---|---|---|
-| **视频** `.mp4` `.mkv` `.webm` `.mov` `.flv` | 能 | 不需要 |
-| **GIF 动图** `.gif` | **能（完全没问题）** | **不需要** |
-| **静态图** `.png` `.jpg` `.webp`（单帧） | 能 | 不需要 |
-| **动图 WebP** `.webp`（多帧） | 看情况 | **需要装 `sharp`**（或系统 ffmpeg 6.x） |
+| **视频** `.mp4` `.mkv` `.webm` `.mov` `.flv` | ✅ 能 | 不需要 |
+| **GIF 动图** `.gif` | ✅ **能（完全没问题）** | **不需要** |
+| **静态图** `.png` `.jpg` `.webp`（单帧） | ✅ 能 | 不需要 |
+| **动图 WebP** `.webp`（多帧） | ⚠️ 看情况 | **需要装 `sharp`**（或系统 ffmpeg 6.x） |
 
 一句话：**GIF 和视频开箱即用；只有「动图 WebP」需要额外装一个 `sharp`。**
 
 为什么动图 WebP 特殊：它是 Google 的格式，系统自带的 ffmpeg 4.x 只能读第一帧。
-装了 `sharp` 之后就能逐帧看（`npm i sharp`）；装不上也没关系——其它格式照常工作，
+装上 `sharp` 就能逐帧看（`npm i sharp`）；装不上也没关系——其它格式照常工作，
 只是动图 WebP 会明确告诉你缺什么，而不是给你一张黑图。
 
+---
 
-## 核心：九宫格不是“随便抽 9 帧”
+## 原理：九宫格不是“随便抽 9 帧”
 
 底层是一个**容量固定的 FIFO 队列**：
 
@@ -46,8 +76,8 @@
 画面进来 → 只有「画面发生明显变化」才入队 → 队列满了淘汰最旧的一帧（先进先出）
 ```
 
-**为什么这么做**：一段 5 分钟的视频里可能 4 分钟是静止画面。
-均匀抽 9 帧会把 7 格浪费在重复画面上；按“变化才入队”，这 9 格覆盖的是**全程最有代表性的 9 个瞬间**。
+**为什么这么做**：一段 5 分钟的视频里可能 4 分钟是静止画面。均匀抽 9 帧会把 7 格
+浪费在重复画面上；按“变化才入队”，这 9 格覆盖的是**全程最有代表性的 9 个瞬间**。
 
 队列的两种取用方式（`strategy` 参数）：
 
@@ -58,190 +88,76 @@
 
 **同一套队列，同一个网格，换一个参数就是另一种视角。**
 
-拿不到场景检测结果时（比如纯色背景动画），自动退回均匀采样——**两种路径对调用方透明**。
+拿不到场景变化时（纯色画面、极短片段），自动退回均匀采样——**两种路径对调用方透明**，
+返回文本里会写清楚这次用的是哪种（`mode=scene` / `mode=uniform`）。
 
-## 同一套逻辑覆盖所有媒体
+### 同一套逻辑覆盖所有媒体
 
-| 输入 | 队列容量 | 取样方式 |
+| 输入 | 帧数 | 取样方式 |
 |---|---|---|
-| 视频（.mp4/.mkv/.webm…） | 9（3×3） | 场景变化 → FIFO 队列 |
-| 动图（.gif/.webp/.apng） | 6（3×2） | 按时长均分（一个循环正好铺满） |
-| 静态图（.png/.jpg） | 1 | 原样 |
+| 视频 | 9（3×3） | 画面变化 → FIFO 队列 |
+| 动图 GIF | 6（3×2） | 按时长均分（一个循环正好铺满） |
+| 静态图 | 1 | 原样 |
 
 **调用方不需要知道自己拿到的是哪种媒体。**
 
-## 速览：它给模型的东西长什么样
+---
 
-```
-来源：local（怼脸.gif）
-类型：image（动图/视频）
-尺寸：320×240 · 共 48 帧 · 4.8 秒
-画面：6 帧拼成 3×2 网格（行优先 左上→右下）
-取帧：场景变化检测（全程均匀覆盖），命中 6 个变化点
-```
+## 三种输入，一个入口
 
-外加一张每帧 `240px` 宽的网格图。
+`media_frames` 接受任意一种：
 
-## 安装
-
-### 1. 依赖
-
-```bash
-# yt-dlp 与 ffmpeg 必须在 PATH 里（或用环境变量指定路径）
-yt-dlp --version
-ffmpeg -version
-```
-
-### 2. 装本服务
-
-```bash
-npm install -g mcp-video-learn
-```
-
-或者不装，直接用 `npx`。
-
-### 3. 接到你的 MCP 客户端
-
-以 DSH 为例（`cordis.patch.yml` 里加一行）：
-
-```yaml
-- id: mcp-video-learn
-  name: '@deepseek-ai/dsh-mcp'
-  config:
-    command: npx
-    args: ['-y', 'mcp-video-learn']
-    env:
-      VIDEO_YTDLP: /usr/local/bin/yt-dlp
-      VIDEO_FFMPEG: /usr/bin/ffmpeg
-```
-
-其它客户端（Claude Desktop 等）同理：`command` + `args` 指向本服务即可。
-
-## 环境变量
-
-| 变量 | 默认 | 说明 |
+| 输入 | 例子 | 处理方式 |
 |---|---|---|
-| `VIDEO_YTDLP` | `yt-dlp` | yt-dlp 可执行文件 |
-| `VIDEO_FFMPEG` | `ffmpeg` | ffmpeg 可执行文件 |
-| `VIDEO_COOKIES` | `~/.config/mcp-video-learn/cookies.txt` | 取字幕用；没有则只抽帧 |
-| `VIDEO_AUDIT` | `~/.cache/mcp-video-learn/audit.jsonl` | 审计日志 |
-| `VIDEO_MAX_MB` | `60` | 单次下载体积上限（MB） |
-| `VIDEO_ALLOW_ROOTS` | 当前目录 + 临时目录 | `media_frames` 允许读取的本地目录，用路径分隔符隔开（Windows `;`，Linux/macOS `:`） |
+| 本地文件 | `C:/stickers/怼脸.gif` | 必须在白名单目录内（见下方安全） |
+| 媒体直链 | `https://x.com/a.gif` | 只接受媒体扩展名，限体积 |
+| B 站链接 | `https://b23.tv/xxxx` | 走官方 API（见下节） |
 
-## 动图 / GIF 表情包
+---
 
-`media_frames` 是为这个场景设计的：
-
-- **默认抽 6 帧（3×2）**——动图通常很短，6 帧足够看出动作，又不至于每帧小到看不清；
-- 自动用 `ffprobe` 读出真帧数和时长，**在文本里明确告诉模型“这是动图”**（否则模型会以为是一张静态图）；
-- 静态图也能传，会按 1 帧处理。
-
-**为什么要拼网格而不是发多张图**：一条消息塞多张图，每张都占一次模型请求配额；
-拼成一张网格只占一次，token 也更省。
-
-## 关于字幕
-
-**B 站的 AI 字幕通常需要登录才能取。**
-
-做法：浏览器登录 B 站 → 用扩展导出 `cookies.txt` → 放到
-`~/.config/mcp-video-learn/cookies.txt`（或 `VIDEO_COOKIES` 指定的位置）。
-
-没有 cookies 也能用，只是**没有字幕文本**——画面还在，但纯语音讲解的内容会缺失。
-
-## 限制（重要）
-
-- **只支持 B 站**（`bilibili.com` / `b23.tv`）。这是刻意的：避免被当成任意视频下载器。
-- 下载限 **480p 以下**、单次最多 **60MB**，只够“看懂大意”，不适合看细节。
-- 抽帧是**均匀采样**，快速镜头/关键帧可能被跳过。
-- 步骤超时 **120 秒**；长视频可能失败。
-- 只读，不下载、不发布任何内容。
-
-## 实现
-
-```
-src/lib.js     纯函数（URL 校验、时长格式化、字幕清洗、网格计算）—— 有单测
-src/index.js   MCP 服务：调用 yt-dlp / ffmpeg，把结果整理成 text + image
-test/          node:test，不需要网络和 yt-dlp
-```
-
-跑测试：
-
-```bash
-npm test
-```
-
-## 安全设计
-
-| 措施 | 目的 |
-|---|---|
-| 域名白名单 | 只接受 B 站，防止被当成任意下载器 |
-| 体积上限 | 防止磁盘/带宽被吃光 |
-| 步骤超时 | 防止卡死 |
-| 审计日志 | 每次调用留痕（本地） |
-
-## 许可
-
-MIT © 2026 HOHOLI
-## 验证过的场景（真跑，不是"应该能行"）
-
-自测分三层，全部在 Linux 服务器上真实执行：
-
-| 层 | 命令 | 覆盖 | 结果 |
-|---|---|---|---|
-| 单元 | `npm test` | 队列语义、URL 校验、网格计算 | 18/18 |
-| 真实媒体矩阵 | `npm run selftest:matrix` | mp4/gif/webp/png、1s~40s、横竖屏、frames 1~12、tileWidth 64~640、坏文件、白名单 | 68/68 |
-| MCP 协议 | `npm run selftest:mcp` | 真实拉起服务、列工具、调工具、拒非法输入 | 8/8 |
-
-### 实测发现并修掉的问题（都写在这里，避免后人重踩）
-
-1. **ffmpeg 4.4 没有 `-fps_mode`** —— 用它会报 `Unrecognized option`，必须用 `-vsync vfr`；插件会自动探测版本。
-2. **`select=gt(scene,…)` 只比亮度** —— 红→绿这种"亮度接近、色度差异大"的切换会整段漏掉。改用 `tblend` 差分 + `signalstats` 取 Y/U/V 最大值。
-3. **`tile` 滤镜必须凑满 cols×rows 才输出** —— 场景点不足时补均匀时间点，否则一张图都出不来。
-4. **机房 IP 直连 B 站 412** —— 元信息改走官方 API（需要 `buvid3` cookie，会自动去 `finger/spi` 取）。
-5. **ffmpeg 4.4 解不开动图 WebP** —— 会给出明确报错而不是黑图；静态 WebP 正常。
-
-### 性能
-
-5 分钟 640×360 视频（服务器实测）：场景检测 **3.1 秒**、生成九宫格 **9.2 秒**。
-
-## 已知限制
-
-- **动图 WebP** 需要 ffmpeg ≥ 6.x（4.4 只支持静态 WebP）。
-- **B 站** 走官方 API，机房 IP 可用；极少数受限视频需要登录 cookie。
-- 抽帧是**采样**，不是逐帧分析：极长的视频只能看到代表点。
-- 只读：不下载、不上传、不发布任何内容。
 ## B 站：走官方 API，机房 IP 也能用
 
-**不用 yt-dlp 抓网页**（机房/云服务器 IP 抓 `www.bilibili.com` 会 412），改为：
+云服务器/机房 IP 抓 `www.bilibili.com` 会被 **412** 拦（cookie 也救不了，拦的是网页请求）。
+所以本服务**不抓网页**，直接用官方接口：
 
 ```
-view 接口     → 标题 / UP 主 / 时长 / cid
-wbi 签名      → playurl 拿视频流地址
-player/v2     → 字幕列表 → 下载字幕 JSON
-直接下载流    → ffmpeg 抽帧拼网格
+view 接口   → 标题 / UP 主 / 时长 / cid
+wbi 签名    → playurl 拿视频流地址
+player/v2   → 字幕列表 → 下载字幕 JSON
+直接下流    → ffmpeg 抽帧拼网格
 ```
 
-`buvid3` 会自动向 `/x/frontend/finger/spi` 申请，**不登录也能取元信息**；
-要下载更高码率或绕过部分限制时，再配小号的 cookie（**务必用小号**）：
+`buvid3` 会自动向 `/x/frontend/finger/spi` 申请，**不登录也能取元信息**。
+
+### 需要登录态时（可选）
+
+想要更高码率、或视频有权限限制时，配一个小号 cookie（**务必用小号，不要用主号**）：
 
 ```bash
-export BILI_COOKIES=/path/to/cookies.txt           # Netscape 格式，给 API 用
-# 或者只要一行串（脚本会过滤出 SESSDATA/bili_jct 等必要字段）：
-export BILI_COOKIE="$(node scripts/cookies-to-env.mjs /path/to/cookies.txt)"
+# 方式一：Netscape 格式的 cookies.txt
+export BILI_COOKIES=/root/bili-cookies.txt
+
+# 方式二：一行 cookie 串（脚本只保留必要的几个字段）
+export BILI_COOKIE="$(node scripts/cookies-to-env.mjs /root/bili-cookies.txt)"
 ```
 
-### 怎么拿到 cookies（三步）
+**怎么拿到 cookies**：
 
-1. 用 Chrome / Edge 登录 **B 站小号**，打开 bilibili.com；
+1. 用 Chrome / Edge 登录 B 站小号，打开 bilibili.com；
 2. 装扩展 **Get cookies.txt LOCALLY**，点 Export → 得到 `cookies.txt`；
-3. 传到服务器：`scp cookies.txt root@<host>:/root/bili-cookies.txt && ssh root@<host> "chmod 600 /root/bili-cookies.txt"`。
+3. 传到服务器并收紧权限：
 
-> cookie 等于登录态。不要提交到 git、不要发到聊天里。
-> 没有 cookie 时元信息仍可用；下载会走 API（`qn=32`，约 480p），受限视频才需要登录。
+```bash
+scp cookies.txt root@<host>:/root/bili-cookies.txt
+ssh root@<host> "chmod 600 /root/bili-cookies.txt"
+```
+
+> cookie 等于登录态：**不要提交到 git、不要发到聊天里**。
+> 没有 cookie 时元信息与大部分下载仍可用（`qn=32`，约 480p）。
+
+---
 
 ## 动图 WebP 支持矩阵
-
-ffmpeg 4.x 的解码器只认静态 WebP，动图 WebP 需要另一条路：
 
 | 情况 | 行为 |
 |---|---|
@@ -260,3 +176,97 @@ export SHARP_MODULE=/path/to/node_modules/sharp
 ```
 
 **为什么值得装**：QQ / 微信里的表情包很多是动图 WebP；不装的话这类表情只能看到报错。
+
+---
+
+## 配置项
+
+全部通过环境变量，没有配置文件：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `VIDEO_FFMPEG` | `ffmpeg` | ffmpeg 可执行文件 |
+| `VIDEO_YTDLP` | `yt-dlp` | 仅作为 B 站 API 失败时的兜底 |
+| `VIDEO_COOKIES` | — | 兼容旧名；等同 `BILI_COOKIES` |
+| `BILI_COOKIES` | — | B 站 cookies.txt（Netscape 格式） |
+| `BILI_COOKIE` | — | B 站 cookie 串（`SESSDATA=...; bili_jct=...`） |
+| `VIDEO_AUDIT` | `~/.cache/mcp-video-learn/audit.jsonl` | 审计日志 |
+| `VIDEO_MAX_MB` | `60` | 单次下载体积上限（MB） |
+| `VIDEO_ALLOW_ROOTS` | 当前目录 + 临时目录 | `media_frames` 允许读取的本地目录（路径分隔符分隔） |
+| `SHARP_MODULE` | — | 复用宿主已装的 sharp |
+
+---
+
+## 实测数据与验证
+
+这个插件的“能跑”不是推测，是分层跑出来的：
+
+| 层 | 命令 | 覆盖 | 结果 |
+|---|---|---|---|
+| 单元 | `npm test` | FIFO 队列语义、URL 校验、网格计算、cookie 头拼装 | **20/20** |
+| 真实媒体矩阵 | `npm run selftest:matrix` | mp4/gif/webp/png、1s~40s、横竖屏、frames 1~12、tileWidth 64~640、坏文件、白名单 | **69/69** |
+| MCP 协议 | `npm run selftest:mcp` | 真实拉起服务、列工具、调工具、拒非法输入、真实 B 站 watch | **8/8** |
+
+**性能（服务器实测，5 分钟 640×360 视频）**：场景检测 **3.1 秒**，生成九宫格 **9.2 秒**。
+**B 站真实视频**：3 分 33 秒的 MV，下载 10 MB / 10.5 秒，9 帧网格 + 522 字字幕。
+
+### 踩过并修掉的坑（写给后来的人）
+
+1. **ffmpeg 4.4 没有 `-fps_mode`** —— 会报 `Unrecognized option`，必须用 `-vsync vfr`；插件自动探测版本。
+2. **`select=gt(scene,…)` 只比亮度** —— 红→绿这种“亮度接近、色度差异大”的切换会整段漏掉。
+   改用 `tblend` 差分 + `signalstats` 取 Y/U/V 最大值。
+3. **`tile` 必须凑满 cols×rows 才输出** —— 场景点不足时要补均匀时间点，否则一张图都出不来。
+4. **机房 IP 抓 B 站网页 412** —— 元信息与下载都改走官方 API（带 `buvid3`）。
+5. **ffmpeg 4.4 解不开动图 WebP** —— 用 sharp 兜底；坏文件会被识破（libvips 会把残缺文件解成空白页却不报错）。
+6. **同一功能写了两份实现** —— 测试测的是 A 文件、服务跑的是 B 文件；现在统一到 `src/pipeline.js`。
+
+---
+
+## 已知限制
+
+- **动图 WebP** 需要 `sharp` 或 ffmpeg ≥ 6.x。
+- **B 站**：走 API 可下 480p；更高清晰度/会员内容需要登录 cookie。
+- 抽帧是**采样**，不是逐帧分析：极长的视频只能看到代表点。
+- 字幕只反映台词/讲解；纯语音或音乐视频拿不到内容。
+- 只读：不下载到用户目录、不上传、不发布任何内容。
+
+---
+
+## 安全边界
+
+| 措施 | 目的 |
+|---|---|
+| 本地路径白名单（`VIDEO_ALLOW_ROOTS`） | 防止变成任意文件读取器 |
+| 直链只认媒体扩展名 | 防止变成通用下载器 |
+| 体积上限（`VIDEO_MAX_MB`） | 防止磁盘/带宽被打满 |
+| 步骤超时 | 防止卡死 |
+| 审计日志（本地） | 每次调用留痕 |
+| 只接受 `bilibili.com` / `b23.tv` | 链接白名单 |
+
+---
+
+## 开发
+
+```
+src/index.js      MCP 服务：工具注册与参数校验
+src/pipeline.js   抽帧管线：场景检测 / FIFO 队列 / 网格生成（可独立测试）
+src/filmstrip.js  固定容量队列与两种取用策略（纯函数）
+src/media.js      格式判定、网格计算、ffprobe 结果归一（纯函数）
+src/bili-api.js   B 站官方 API：wbi 签名、playurl、字幕（机房 IP 可用）
+src/webp-sharp.js 动图 WebP 的 sharp 解码（可选依赖）
+src/lib.js        URL 校验、字幕清洗、时长格式化（纯函数）
+scripts/          三层自测 + cookie 转换工具
+test/             node:test
+```
+
+```bash
+npm test                    # 单元测试
+npm run selftest:matrix     # 真实媒体矩阵（需要 ffmpeg）
+npm run selftest:mcp        # MCP 协议层（需要依赖已装）
+```
+
+---
+
+## 许可
+
+MIT © 2026 HOHOLI
