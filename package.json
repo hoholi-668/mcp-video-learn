@@ -18,7 +18,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/",
+    "test": "node --test",
     "selftest": "node scripts/selftest-video.mjs",
     "selftest:matrix": "node scripts/selftest-matrix.mjs",
     "selftest:mcp": "node scripts/selftest-mcp.mjs"
