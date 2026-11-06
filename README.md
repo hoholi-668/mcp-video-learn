@@ -222,6 +222,10 @@ export SHARP_MODULE=/path/to/node_modules/sharp
 
 ---
 
+## 遇到问题
+
+先看 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)：按症状查原因和处理方法。
+
 ## 已知限制
 
 - **动图 WebP** 需要 `sharp` 或 ffmpeg ≥ 6.x。
