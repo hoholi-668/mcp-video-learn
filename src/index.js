@@ -26,6 +26,9 @@ import { z } from 'zod';
 import { normalizeBiliUrl, fmtDuration, subtitlesToText, gridFor, pickVideoFile } from './lib.js';
 import { guessKind, pickFrames, gridForFrames, tileFilter, isUnderRoots, isDirectMediaUrl, describeProbe } from './media.js';
 import { pickTimestamps } from './filmstrip.js';
+import { makePipeline } from './pipeline.js';
+
+const pipe = makePipeline();
 
 const YTDLP = process.env.VIDEO_YTDLP || 'yt-dlp';
 const FFMPEG = process.env.VIDEO_FFMPEG || 'ffmpeg';
@@ -91,13 +94,7 @@ function ytdlpArgs(extra = []) {
 }
 
 /** ffprobe 出 JSON（流 + 容器信息）。 */
-async function probeMedia(file) {
-  const res = await run(FFMPEG.replace(/ffmpeg(\.exe)?$/i, (m) => m.replace(/ffmpeg/i, 'ffprobe')), [
-    '-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', file
-  ]);
-  if (!res.ok) return null;
-  try { return JSON.parse(res.stdout); } catch { return null; }
-}
+async function probeMedia(file) { return pipe.probeMedia(file); }
 
 /** 把直链下载到临时文件（限制体积，避免变成通用下载器）。 */
 async function downloadDirect(url, dir) {
@@ -157,69 +154,8 @@ async function resolveMedia(input, dir) {
  * 用 ffmpeg 的场景检测拿到「画面发生明显变化」的时间点。
  * 解析 stderr 里的 showinfo 行（pts_time），失败就返回空数组走均匀采样。
  */
-async function sceneCandidates(file, { minScore = 0.25, timeoutMs = 180_000 } = {}) {
-  const res = await run(FFMPEG, [
-    '-v', 'info', '-i', file,
-    '-vf', `select='gt(scene,${minScore})',showinfo`,
-    '-an', '-f', 'null', '-'
-  ], timeoutMs);
-  const out = [];
-  const re = /pts_time:([0-9]+(?:\.[0-9]+)?)/g;
-  let m;
-  const text = String(res.stderr || '');
-  while ((m = re.exec(text)) !== null) {
-    const t = Number(m[1]);
-    if (Number.isFinite(t)) out.push({ t, score: minScore });
-  }
-  // 去重 + 升序（同一秒内的重复点没有意义）
-  const seen = new Set();
-  return out.filter((c) => {
-    const k = c.t.toFixed(2);
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  }).sort((a, b) => a.t - b.t);
-}
-
-/**
- * 从视频里生成一张帧网格。
- *
- * 默认走「场景变化 → FIFO 队列」这条路：
- *   只有画面真正变化才入队，队列满了淘汰最旧的，最终快照覆盖最有代表性的瞬间。
- * 拿不到场景检测结果时，退回均匀采样（老的 fps 方案）。
- *
- * @returns {{ok:boolean, outJpg?:string, mode?:string, timestamps?:number[], error?:string}}
- */
-async function buildVideoGrid({ file, want, tileWidth, strategy, dir }) {
-  const candidates = await sceneCandidates(file);
-  const times = pickTimestamps(candidates, want, strategy);
-  const outJpg = path.join(dir, 'grid.jpg');
-
-  if (times.length >= Math.min(2, want)) {
-    // 按选中的时间点精确抓帧：一次 ffmpeg，select 里用 between 命中每个时间点
-    const terms = times
-      .map((t) => `between(t,${Math.max(0, t - 0.02).toFixed(3)},${(t + 0.02).toFixed(3)})`)
-      .join('+');
-    const vf = `select='${terms}',${tileFilter({ cols: gridForFrames(want).cols, rows: gridForFrames(want).rows }, { tileWidth })}`;
-    const ff = await run(FFMPEG, ['-v', 'error', '-y', '-i', file, '-vf', vf, '-fps_mode', 'vfr', '-frames:v', '1', '-q:v', '4', outJpg]);
-    if (ff.ok && fs.existsSync(outJpg)) {
-      return { ok: true, outJpg, mode: 'scene', timestamps: times };
-    }
-  }
-
-  // 退回均匀采样
-  const probe = await probeMedia(file);
-  const meta = describeProbe(probe);
-  const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
-  const grid = gridForFrames(want);
-  const vf = duration > 0.05
-    ? `fps=${Math.max(0.01, Math.min(30, want / duration)).toFixed(4)},${tileFilter(grid, { tileWidth })}`
-    : tileFilter(grid, { tileWidth });
-  const ff = await run(FFMPEG, ['-v', 'error', '-y', '-i', file, '-vf', vf, '-frames:v', '1', '-q:v', '4', outJpg]);
-  return ff.ok && fs.existsSync(outJpg)
-    ? { ok: true, outJpg, mode: 'uniform', timestamps: [] }
-    : { ok: false, error: ff.stderr?.slice(0, 200) || 'ffmpeg 无输出' };
-}
+async function sceneCandidates(file, opts = {}) { return pipe.sceneCandidates(file, opts); }
+async function buildVideoGrid(args) { return pipe.buildVideoGrid(args); }
 
 const server = new McpServer({ name: 'video-learn', version: '0.3.0' });
 
@@ -230,9 +166,20 @@ server.tool(
   async ({ url }) => {
     const target = normalizeBiliUrl(url);
     if (!target) return { content: [{ type: 'text', text: '拒绝：只支持 bilibili.com / b23.tv 链接' }], isError: true };
+
+    // 先走官方 API：机房 IP 直连网页会被 412 拦，但 api.bilibili.com 可用。
+    const api = await pipe.biliApiInfo(target);
+    if (api.ok) {
+      audit({ tool: 'info', url: target, ok: true, via: 'api' });
+      return { content: [{ type: 'text', text: JSON.stringify({ ...api.info, via: 'api' }, null, 2) }] };
+    }
+
     const res = await run(YTDLP, ytdlpArgs(['--dump-single-json', '--skip-download', target]));
     audit({ tool: 'info', url: target, ok: res.ok });
-    if (!res.ok) return { content: [{ type: 'text', text: `获取失败：${res.stderr.slice(0, 300)}` }], isError: true };
+    if (!res.ok) {
+      const hint = /412/.test(res.stderr) ? '（机房 IP 直连 B 站常被 412 拦，API 也没取到；可换家宽网络，或用基于 API 的 mcp-bili）' : '';
+      return { content: [{ type: 'text', text: `获取失败：${res.stderr.slice(0, 300)}${hint}` }], isError: true };
+    }
     let info;
     try { info = JSON.parse(res.stdout); } catch { return { content: [{ type: 'text', text: '解析失败：yt-dlp 输出不是 JSON' }], isError: true }; }
     const subs = Object.keys({ ...(info.subtitles ?? {}), ...(info.automatic_captions ?? {}) });
@@ -263,6 +210,19 @@ server.tool(
     const metaRes = await run(YTDLP, ytdlpArgs(['--dump-single-json', '--skip-download', target]));
     if (!metaRes.ok) {
       audit({ tool: 'watch', url: target, ok: false, stage: 'meta' });
+      // 机房 IP 直连 B 站网页会被 412 拦，yt-dlp 拿不到元信息也就无法下载。
+      // 把「为什么失败 + 能用什么替代」直接告诉调用方，而不是甩一段 yt-dlp 原始报错。
+      if (/412/.test(metaRes.stderr)) {
+        const api = await pipe.biliApiInfo(target);
+        const title = api.ok ? `（视频本身存在：${api.info.title}，${api.info.duration} 秒）` : '';
+        return {
+          content: [{
+            type: 'text',
+            text: `B 站网页接口返回 412：这台机器的出口 IP 被拦，yt-dlp 无法下载。${title}\n可以用：\n  1) 在家宽网络下运行本服务；\n  2) 或用 media_frames 直接传视频直链；\n  3) 或用基于官方 API 的 mcp-bili。`
+          }],
+          isError: true
+        };
+      }
       return { content: [{ type: 'text', text: `获取元信息失败：${metaRes.stderr.slice(0, 300)}` }], isError: true };
     }
     let info = {};
@@ -418,3 +378,5 @@ server.tool(
 audit({ tool: 'startup', cookies: fs.existsSync(COOKIES) });
 console.error(`[video-learn] ready — cookies=${fs.existsSync(COOKIES) ? 'yes' : 'no'}`);
 await server.connect(new StdioServerTransport());
+
+

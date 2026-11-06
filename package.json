@@ -1,6 +1,6 @@
 {
   "name": "mcp-video-learn",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "MCP server that lets an LLM actually watch videos and animated stickers: metadata, frame grids, subtitles.",
   "license": "MIT",
   "type": "module",
@@ -19,7 +19,9 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/",
-    "selftest": "node scripts/selftest-video.mjs"
+    "selftest": "node scripts/selftest-video.mjs",
+    "selftest:matrix": "node scripts/selftest-matrix.mjs",
+    "selftest:mcp": "node scripts/selftest-mcp.mjs"
   },
   "keywords": [
     "mcp",
