@@ -89,7 +89,9 @@ function ytdlpArgs(extra = []) {
     '--extractor-args',
     'bilibili:prefer_multi_flv=false'
   );
-  if (fs.existsSync(COOKIES)) args.push('--cookies', COOKIES);
+  // B 站登录态：VIDEO_COOKIES 优先，其次 BILI_COOKIES（方便直接复用导出的小号 cookie）
+  const cookieFile = [process.env.BILI_COOKIES, COOKIES].find((p) => p && fs.existsSync(p));
+  if (cookieFile) args.push('--cookies', cookieFile);
   return [...args, ...extra];
 }
 
@@ -378,5 +380,6 @@ server.tool(
 audit({ tool: 'startup', cookies: fs.existsSync(COOKIES) });
 console.error(`[video-learn] ready — cookies=${fs.existsSync(COOKIES) ? 'yes' : 'no'}`);
 await server.connect(new StdioServerTransport());
+
 
 

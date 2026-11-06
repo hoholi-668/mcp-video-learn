@@ -194,3 +194,44 @@ MIT © 2026 HOHOLI
 - **B 站视频下载** 需要非机房 IP（家宽/代理）；元信息可以走 API，但下载仍要能访问网页。
 - 抽帧是**采样**，不是逐帧分析：极长的视频只能看到代表点。
 - 只读：不下载、不上传、不发布任何内容。
+## B 站登录态（小号方案）
+
+机房/云服务器直连 B 站会被 **412** 拦。用一个小号登录后导出 cookie，可以让元信息
+和下载都恢复正常（**务必用小号，不要用主号**）：
+
+```bash
+# 1) 浏览器登录 B 站小号，用扩展导出 cookies.txt（Netscape 格式）
+# 2) 指给插件：
+export BILI_COOKIES=/path/to/cookies.txt        # 给 yt-dlp 下载用
+export BILI_COOKIE="SESSDATA=...; bili_jct=..." # 给官方 API 用（元信息）
+```
+
+| 变量 | 作用 | 没有会怎样 |
+|---|---|---|
+| `BILI_COOKIES` | yt-dlp `--cookies` | 下载可能 412 |
+| `BILI_COOKIE` | API Cookie 头 | 元信息可能 412 |
+
+> 没有 cookie 时：**元信息仍走 API**（自动取 `buvid3` 绕过 412），大多数公开视频能拿到标题/时长；
+> 只有下载仍需要能访问网页的出口 IP。
+
+## 动图 WebP 支持矩阵
+
+ffmpeg 4.x 的解码器只认静态 WebP，动图 WebP 需要另一条路：
+
+| 情况 | 行为 |
+|---|---|
+| 静态 WebP | ✅ ffmpeg 直接处理 |
+| 动图 WebP + **装了 sharp** | ✅ 逐帧解码后拼网格（`mode=webp-sharp`） |
+| 动图 WebP + **没装 sharp** | ❌ 明确报错，告诉你装什么 |
+| 动图 WebP + **ffmpeg 6.x** | ✅ 走 ffmpeg 正常路径 |
+| **坏掉的 WebP** | ❌ 识破并报错（不会输出一张空白图） |
+
+装 sharp（可选依赖，不装也能用其它格式）：
+
+```bash
+npm i sharp
+# 或者复用宿主里已装的 sharp：
+export SHARP_MODULE=/path/to/node_modules/sharp
+```
+
+**为什么值得装**：QQ / 微信里的表情包很多是动图 WebP；不装的话这类表情只能看到报错。

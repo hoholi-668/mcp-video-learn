@@ -10,6 +10,24 @@ import { spawn } from 'node:child_process';
 import { pickVideoFile } from './lib.js';
 import { gridForFrames, tileFilter, describeProbe } from './media.js';
 import { pickTimestamps } from './filmstrip.js';
+import { webpGridWithSharp, webpPages } from './webp-sharp.js';
+
+/** 拼 B 站 API 的 Cookie 头：登录态 + buvid3（去重、去空）。 */
+export function buildBiliCookieHeader(cookieHeader, buvid3) {
+  const parts = [];
+  const raw = String(cookieHeader || '').trim().replace(/;\s*$/, '');
+  if (raw) parts.push(raw);
+  if (buvid3 && !/buvid3=/.test(raw)) parts.push(`buvid3=${buvid3}`);
+  return parts.join('; ');
+}
+
+/** 组装 yt-dlp 的 B 站下载参数（纯函数，便于测试是否真的带上了 cookies）。 */
+export function buildBiliDlpArgs({ cookieFile, maxDownload, outTemplate, url }) {
+  const args = ['--no-warnings', '--no-playlist'];
+  if (cookieFile) args.push('--cookies', cookieFile);
+  args.push('-f', 'bv*[height<=480]+ba/b[height<=480]/worst', '--max-filesize', String(maxDownload), '-o', outTemplate, url);
+  return args;
+}
 
 export function makePipeline({
   ffmpeg = process.env.VIDEO_FFMPEG || 'ffmpeg',
@@ -20,6 +38,11 @@ export function makePipeline({
   cookiesPath = ''
 } = {}) {
   const maxDownload = maxDownloadMb * 1024 * 1024;
+  // B 站登录态：
+  //   BILI_COOKIES = cookies.txt 路径（给 yt-dlp 用）
+  //   BILI_COOKIE  = 原始 cookie 串（给官方 API 用）
+  const biliCookiesFile = process.env.BILI_COOKIES || cookiesPath || '';
+  const biliCookieHeader = String(process.env.BILI_COOKIE || '');
   const ffprobe = ffmpeg.replace(/ffmpeg(\.exe)?$/i, (m) => m.replace(/ffmpeg/i, 'ffprobe'));
 
   // ffmpeg 5.1+ 用 -fps_mode，4.x 只认 -vsync（实测 Ubuntu 22.04 自带 4.4 会报
@@ -142,16 +165,44 @@ export function makePipeline({
     const meta = describeProbe(await probeMedia(file));
     const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
 
+    // 动图 WebP：ffmpeg 4.x 只能读出第一帧（甚至 0×0），所以优先问 sharp 有几页；
+    // 页数 >1 就直接走 sharp 逐帧解码，否则按静态图交给 ffmpeg。
+    if (/\.webp$/i.test(String(file))) {
+      const pages = await webpPages(file);
+      if (pages > 1) {
+        const viaSharp = await webpGridWithSharp({
+          file, want, cols: grid.cols, rows: grid.rows, tileWidth, outJpg
+        });
+        if (viaSharp.ok) {
+          return {
+            ok: true, outJpg, mode: 'webp-sharp',
+            timestamps: [], candidates: viaSharp.pages || 0,
+            note: `动图 WebP 经 sharp 解码（共 ${viaSharp.pages} 页，取 ${viaSharp.frames} 帧）`
+          };
+        }
+        return { ok: false, error: viaSharp.error, missingSharp: !!viaSharp.missing };
+      }
+    }
+
     // ffmpeg 4.x 的 webp 解码器只认静态 webp：动图 webp 会解出 0×0。
-    // 与其静默出一张黑图，不如明确告诉调用方「这个文件我解不开，以及为什么」。
+    // 这时优先用 sharp（libvips，DSH 自己也是用它）逐帧解码；没有 sharp 再给明确提示。
     if (meta.width <= 0 || meta.height <= 0) {
-      const isWebp = /\.webp$/i.test(String(file));
+      if (/\.webp$/i.test(String(file))) {
+        const viaSharp = await webpGridWithSharp({
+          file, want, cols: grid.cols, rows: grid.rows, tileWidth, outJpg
+        });
+        if (viaSharp.ok) {
+          return {
+            ok: true, outJpg, mode: 'webp-sharp',
+            timestamps: [], candidates: viaSharp.pages || 0,
+            note: `动图 WebP 经 sharp 解码（共 ${viaSharp.pages || '?'} 页，取 ${viaSharp.frames} 帧）`
+          };
+        }
+        return { ok: false, error: viaSharp.error, missingSharp: !!viaSharp.missing };
+      }
       return {
         ok: false,
-        error: isWebp
-          ? '解不开这个 WebP：当前 ffmpeg 版本只支持静态 WebP，动图 WebP 需要 ffmpeg 6.x 以上'
-            + '（或先用 webp-tools 的 dwebp/img2webp 转成 GIF）。'
-          : 'ffmpeg 解不开这个文件（探测不到画面尺寸，可能已损坏或不是媒体）'
+        error: 'ffmpeg 解不开这个文件（探测不到画面尺寸，可能已损坏或不是媒体）'
       };
     }
 
@@ -244,7 +295,7 @@ export function makePipeline({
         headers: {
           'user-agent': UA,
           referer: 'https://www.bilibili.com/',
-          ...(buvid3 ? { cookie: `buvid3=${buvid3}` } : {})
+          ...(biliCookieHeader || buvid3 ? { cookie: [biliCookieHeader, buvid3 ? `buvid3=${buvid3}` : ''].filter(Boolean).join('; ') } : {})
         },
         signal: AbortSignal.timeout(15_000)
       });
@@ -294,10 +345,9 @@ export function makePipeline({
   async function downloadBili(url, dir) {
     const dlDir = path.join(dir, 'dl');
     fs.mkdirSync(dlDir, { recursive: true });
-    const args = ['--no-warnings', '--no-playlist', '--ffmpeg-location', path.dirname(ffmpeg)];
-    if (cookiesPath && fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
-    args.push('-f', 'bv*[height<=480]+ba/b[height<=480]/worst', '--max-filesize', String(maxDownload),
-      '-o', path.join(dlDir, 'media.%(ext)s'), url);
+    const cookieFile = biliCookiesFile && fs.existsSync(biliCookiesFile) ? biliCookiesFile : '';
+    const args = ['--ffmpeg-location', path.dirname(ffmpeg),
+      ...buildBiliDlpArgs({ cookieFile, maxDownload, outTemplate: path.join(dlDir, 'media.%(ext)s'), url })];
     const dl = await run(ytdlp, args, 180_000);
     if (!dl.ok) return { ok: false, error: `B 站下载失败：${dl.stderr.slice(0, 300)}` };
     const names = fs.readdirSync(dlDir).map((n) => path.join(dlDir, n));
@@ -307,6 +357,9 @@ export function makePipeline({
 
   return { run, probeMedia, sceneCandidates, buildVideoGrid, downloadDirect, downloadBili, biliApiInfo, ffmpeg, ffprobe, ytdlp };
 }
+
+
+
 
 
 

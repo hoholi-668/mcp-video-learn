@@ -1,6 +1,6 @@
 {
   "name": "mcp-video-learn",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "description": "MCP server that lets an LLM actually watch videos and animated stickers: metadata, frame grids, subtitles.",
   "license": "MIT",
   "type": "module",
@@ -46,5 +46,8 @@
   "homepage": "https://github.com/hoholi-668/mcp-video-learn#readme",
   "bugs": {
     "url": "https://github.com/hoholi-668/mcp-video-learn/issues"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.33.0"
   }
 }

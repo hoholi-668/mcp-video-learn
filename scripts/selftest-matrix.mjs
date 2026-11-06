@@ -119,9 +119,23 @@ console.log('\n[3] 动图与静态图 …');
 }
 await runGrid('GIF 6帧', fixtures.gif, { want: 6, expectMode: 'uniform' });
 {
-  // ffmpeg 4.x 解不开动图 WebP（实测官方样例同样失败）——这里验证的是「会不会清楚报错」
+  // 坏 WebP：libvips 会把它解成空白页而不报错，插件必须识破并拒绝（防假成功）
   const built = await pipe.buildVideoGrid({ file: fixtures.webp, want: 6, dir: fs.mkdtempSync(path.join(outDir, 'g-')) });
-  ok('动图 WebP 给出可操作的报错', !built.ok && /WebP|ffmpeg/.test(built.error || ''), (built.error || '').slice(0, 70));
+  ok('坏 WebP 被识破（不假装成功）', !built.ok && /空白|损坏|sharp|ffmpeg/.test(built.error || ''), (built.error || '').slice(0, 70));
+}
+{
+  // 真动图 WebP：需要外部样例（ANIM_WEBP 指向一个真·动图 WebP）
+  const anim = process.env.ANIM_WEBP;
+  if (!anim || !fs.existsSync(anim)) {
+    console.log('  (跳过真动图 WebP：未提供 ANIM_WEBP)');
+  } else {
+    const built = await pipe.buildVideoGrid({ file: anim, want: 6, dir: fs.mkdtempSync(path.join(outDir, 'g-')) });
+    if (process.env.SHARP_MODULE) {
+      ok('真动图 WebP 经 sharp 解码', built.ok && built.mode === 'webp-sharp', built.ok ? built.note : built.error?.slice(0, 60));
+    } else {
+      ok('无 sharp 时真动图给出明确提示', !built.ok && /sharp|ffmpeg/.test(built.error || ''), (built.error || '').slice(0, 60));
+    }
+  }
 }
 {
   // 静态 WebP 必须能看
@@ -162,4 +176,6 @@ if (fail) {
   for (const f of failures) console.error('  -', f);
 }
 process.exitCode = fail ? 1 : 0;
+
+
 
