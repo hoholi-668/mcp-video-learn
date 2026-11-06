@@ -230,6 +230,28 @@ export BILI_COOKIE="SESSDATA=...; bili_jct=..." # 给官方 API 用（元信息�
 > 没有 cookie 时：**元信息仍走 API**（自动取 `buvid3` 绕过 412），大多数公开视频能拿到标题/时长；
 > 只有下载仍需要能访问网页的出口 IP。
 
+
+### 怎么拿到 cookies（三步）
+
+1. 用 Chrome / Edge 登录 **B 站小号**（**不要用主号**），打开 bilibili.com；
+2. 装扩展 **Get cookies.txt LOCALLY**，点 Export → 得到 `cookies.txt`；
+3. 把文件放到服务器并设权限：
+
+```bash
+scp cookies.txt root@<你的服务器>:/root/bili-cookies.txt
+ssh root@<你的服务器> "chmod 600 /root/bili-cookies.txt"
+```
+
+导出后可以直接用文件（yt-dlp），也可以转成一行 cookie 串（官方 API）：
+
+```bash
+export BILI_COOKIES=/root/bili-cookies.txt
+export BILI_COOKIE="$(node scripts/cookies-to-env.mjs /root/bili-cookies.txt)"
+```
+
+> `cookies-to-env.mjs` 只保留 B 站登录需要的字段（SESSDATA / bili_jct / DedeUserID / buvid3 等），
+> 不会把无关 cookie 带进请求头。**cookie 等于登录态，不要提交到 git、不要发到聊天里。**
+
 ## 动图 WebP 支持矩阵
 
 ffmpeg 4.x 的解码器只认静态 WebP，动图 WebP 需要另一条路：
