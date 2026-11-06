@@ -207,50 +207,37 @@ MIT © 2026 HOHOLI
 ## 已知限制
 
 - **动图 WebP** 需要 ffmpeg ≥ 6.x（4.4 只支持静态 WebP）。
-- **B 站视频下载** 需要非机房 IP（家宽/代理）；元信息可以走 API，但下载仍要能访问网页。
+- **B 站** 走官方 API，机房 IP 可用；极少数受限视频需要登录 cookie。
 - 抽帧是**采样**，不是逐帧分析：极长的视频只能看到代表点。
 - 只读：不下载、不上传、不发布任何内容。
-## B 站登录态（小号方案）
+## B 站：走官方 API，机房 IP 也能用
 
-机房/云服务器直连 B 站会被 **412** 拦。用一个小号登录后导出 cookie，可以让元信息
-和下载都恢复正常（**务必用小号，不要用主号**）：
+**不用 yt-dlp 抓网页**（机房/云服务器 IP 抓 `www.bilibili.com` 会 412），改为：
 
-```bash
-# 1) 浏览器登录 B 站小号，用扩展导出 cookies.txt（Netscape 格式）
-# 2) 指给插件：
-export BILI_COOKIES=/path/to/cookies.txt        # 给 yt-dlp 下载用
-export BILI_COOKIE="SESSDATA=...; bili_jct=..." # 给官方 API 用（元信息）
+```
+view 接口     → 标题 / UP 主 / 时长 / cid
+wbi 签名      → playurl 拿视频流地址
+player/v2     → 字幕列表 → 下载字幕 JSON
+直接下载流    → ffmpeg 抽帧拼网格
 ```
 
-| 变量 | 作用 | 没有会怎样 |
-|---|---|---|
-| `BILI_COOKIES` | yt-dlp `--cookies` | 下载可能 412 |
-| `BILI_COOKIE` | API Cookie 头 | 元信息可能 412 |
+`buvid3` 会自动向 `/x/frontend/finger/spi` 申请，**不登录也能取元信息**；
+要下载更高码率或绕过部分限制时，再配小号的 cookie（**务必用小号**）：
 
-> 没有 cookie 时：**元信息仍走 API**（自动取 `buvid3` 绕过 412），大多数公开视频能拿到标题/时长；
-> 只有下载仍需要能访问网页的出口 IP。
-
+```bash
+export BILI_COOKIES=/path/to/cookies.txt           # Netscape 格式，给 API 用
+# 或者只要一行串（脚本会过滤出 SESSDATA/bili_jct 等必要字段）：
+export BILI_COOKIE="$(node scripts/cookies-to-env.mjs /path/to/cookies.txt)"
+```
 
 ### 怎么拿到 cookies（三步）
 
-1. 用 Chrome / Edge 登录 **B 站小号**（**不要用主号**），打开 bilibili.com；
+1. 用 Chrome / Edge 登录 **B 站小号**，打开 bilibili.com；
 2. 装扩展 **Get cookies.txt LOCALLY**，点 Export → 得到 `cookies.txt`；
-3. 把文件放到服务器并设权限：
+3. 传到服务器：`scp cookies.txt root@<host>:/root/bili-cookies.txt && ssh root@<host> "chmod 600 /root/bili-cookies.txt"`。
 
-```bash
-scp cookies.txt root@<你的服务器>:/root/bili-cookies.txt
-ssh root@<你的服务器> "chmod 600 /root/bili-cookies.txt"
-```
-
-导出后可以直接用文件（yt-dlp），也可以转成一行 cookie 串（官方 API）：
-
-```bash
-export BILI_COOKIES=/root/bili-cookies.txt
-export BILI_COOKIE="$(node scripts/cookies-to-env.mjs /root/bili-cookies.txt)"
-```
-
-> `cookies-to-env.mjs` 只保留 B 站登录需要的字段（SESSDATA / bili_jct / DedeUserID / buvid3 等），
-> 不会把无关 cookie 带进请求头。**cookie 等于登录态，不要提交到 git、不要发到聊天里。**
+> cookie 等于登录态。不要提交到 git、不要发到聊天里。
+> 没有 cookie 时元信息仍可用；下载会走 API（`qn=32`，约 480p），受限视频才需要登录。
 
 ## 动图 WebP 支持矩阵
 

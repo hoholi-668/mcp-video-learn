@@ -11,6 +11,7 @@ import { pickVideoFile } from './lib.js';
 import { gridForFrames, tileFilter, describeProbe } from './media.js';
 import { pickTimestamps } from './filmstrip.js';
 import { webpGridWithSharp, webpPages } from './webp-sharp.js';
+import { makeBiliApi } from './bili-api.js';
 
 /** 拼 B 站 API 的 Cookie 头：登录态 + buvid3（去重、去空）。 */
 export function buildBiliCookieHeader(cookieHeader, buvid3) {
@@ -43,6 +44,8 @@ export function makePipeline({
   //   BILI_COOKIE  = 原始 cookie 串（给官方 API 用）
   const biliCookiesFile = process.env.BILI_COOKIES || cookiesPath || '';
   const biliCookieHeader = String(process.env.BILI_COOKIE || '');
+  // 官方 API 通道：机房 IP 也能用（不抓网页），优先于 yt-dlp
+  const bili = makeBiliApi({ cookiesFile: biliCookiesFile, cookieHeader: biliCookieHeader, maxBytes: maxDownload });
   const ffprobe = ffmpeg.replace(/ffmpeg(\.exe)?$/i, (m) => m.replace(/ffmpeg/i, 'ffprobe'));
 
   // ffmpeg 5.1+ 用 -fps_mode，4.x 只认 -vsync（实测 Ubuntu 22.04 自带 4.4 会报
@@ -341,22 +344,38 @@ export function makePipeline({
     return { ok: true, file };
   }
 
-  /** B 站链接用 yt-dlp 下 480p。 */
+  /** B 站下载：先走官方 API（机房 IP 也能用），失败再退回 yt-dlp。 */
   async function downloadBili(url, dir) {
-    const dlDir = path.join(dir, 'dl');
-    fs.mkdirSync(dlDir, { recursive: true });
-    const cookieFile = biliCookiesFile && fs.existsSync(biliCookiesFile) ? biliCookiesFile : '';
-    const args = ['--ffmpeg-location', path.dirname(ffmpeg),
-      ...buildBiliDlpArgs({ cookieFile, maxDownload, outTemplate: path.join(dlDir, 'media.%(ext)s'), url })];
-    const dl = await run(ytdlp, args, 180_000);
-    if (!dl.ok) return { ok: false, error: `B 站下载失败：${dl.stderr.slice(0, 300)}` };
-    const names = fs.readdirSync(dlDir).map((n) => path.join(dlDir, n));
-    const file = pickVideoFile(names);
-    return file ? { ok: true, file, source: 'bilibili' } : { ok: false, error: '下载后没找到视频文件' };
+    // ① 官方 API 通道
+    try {
+      await bili.ensureBuvid?.();
+      const m = await bili.meta(url);
+      const dest = path.join(dir, 'bili.mp4');
+      const dl = await bili.download(m, dest);
+      return { ok: true, file: dest, source: 'bilibili-api', meta: m, bytes: dl.bytes };
+    } catch (apiError) {
+      // ② 退路：yt-dlp（需要能访问网页，家宽/代理环境下可用）
+      const dlDir = path.join(dir, 'dl');
+      fs.mkdirSync(dlDir, { recursive: true });
+      const cookieFile = biliCookiesFile && fs.existsSync(biliCookiesFile) ? biliCookiesFile : '';
+      const args = ['--ffmpeg-location', path.dirname(ffmpeg),
+        ...buildBiliDlpArgs({ cookieFile, maxDownload, outTemplate: path.join(dlDir, 'media.%(ext)s'), url })];
+      const dl = await run(ytdlp, args, 180_000);
+      if (!dl.ok) {
+        return {
+          ok: false,
+          error: `B 站下载失败：API ${String(apiError?.message ?? apiError).slice(0, 120)}；yt-dlp ${dl.stderr.slice(0, 160)}`
+        };
+      }
+      const names = fs.readdirSync(dlDir).map((n) => path.join(dlDir, n));
+      const file = pickVideoFile(names);
+      return file ? { ok: true, file, source: 'yt-dlp' } : { ok: false, error: '下载后没找到视频文件' };
+    }
   }
 
-  return { run, probeMedia, sceneCandidates, buildVideoGrid, downloadDirect, downloadBili, biliApiInfo, ffmpeg, ffprobe, ytdlp };
+  return { run, probeMedia, sceneCandidates, buildVideoGrid, downloadDirect, downloadBili, biliApiInfo, bili, ffmpeg, ffprobe, ytdlp };
 }
+
 
 
 

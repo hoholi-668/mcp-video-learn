@@ -201,102 +201,50 @@ server.tool(
 
 server.tool(
   'bili_video_watch',
-  '真正“看”一个 B 站视频：下载低清版 → 抽 N 帧拼成网格（画面）+ 能拿到的话附上字幕文本（内容）。'
-  + '适合回答“这个视频讲了什么”。注意：只有字幕能反映台词/讲解，纯语音内容会缺失；下载可能花十几秒。',
+  '真正“看”一个 B 站视频：走官方 API 下载低清流（机房 IP 也可用）→ 抽 N 帧拼成网格 + 字幕文本。'
+  + '适合回答“这个视频讲了什么”。注意：只有字幕能反映台词/讲解，纯语音内容会缺失。',
   { url: z.string().describe('B 站链接'), frames: z.number().int().min(4).max(12).optional().describe('抽几帧，默认 9') },
   async ({ url, frames }) => {
     const target = normalizeBiliUrl(url);
     if (!target) return { content: [{ type: 'text', text: '拒绝：只支持 bilibili.com / b23.tv 链接' }], isError: true };
-    const { want, cols, rows } = gridFor(frames ?? 9);
-
-    const metaRes = await run(YTDLP, ytdlpArgs(['--dump-single-json', '--skip-download', target]));
-    if (!metaRes.ok) {
-      audit({ tool: 'watch', url: target, ok: false, stage: 'meta' });
-      // 机房 IP 直连 B 站网页会被 412 拦，yt-dlp 拿不到元信息也就无法下载。
-      // 把「为什么失败 + 能用什么替代」直接告诉调用方，而不是甩一段 yt-dlp 原始报错。
-      if (/412/.test(metaRes.stderr)) {
-        const api = await pipe.biliApiInfo(target);
-        const title = api.ok ? `（视频本身存在：${api.info.title}，${api.info.duration} 秒）` : '';
-        return {
-          content: [{
-            type: 'text',
-            text: `B 站网页接口返回 412：这台机器的出口 IP 被拦，yt-dlp 无法下载。${title}\n可以用：\n  1) 在家宽网络下运行本服务；\n  2) 或用 media_frames 直接传视频直链；\n  3) 或用基于官方 API 的 mcp-bili。`
-          }],
-          isError: true
-        };
-      }
-      return { content: [{ type: 'text', text: `获取元信息失败：${metaRes.stderr.slice(0, 300)}` }], isError: true };
-    }
-    let info = {};
-    try { info = JSON.parse(metaRes.stdout); } catch { /* 后面还能继续抽帧 */ }
-
+    const want = pickFrames('video', frames);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-learn-'));
     try {
-      // 1) 字幕（失败无所谓，B 站 AI 字幕多数要登录）
-      const subDir = path.join(dir, 'subs');
-      fs.mkdirSync(subDir, { recursive: true });
-      await run(YTDLP, ytdlpArgs([
-        '--skip-download', '--write-subs', '--write-auto-subs',
-        '--sub-langs', 'zh-Hans,zh-CN,zh,ai-zh,en', '--convert-subs', 'vtt',
-        '-o', path.join(subDir, '%(id)s.%(ext)s'), target
-      ]));
-      let subtitleText = '';
+      // 1) 元信息 + 字幕（API 通道，不抓网页）
+      let meta = null;
       try {
-        const files = fs.readdirSync(subDir).filter((f) => f.endsWith('.vtt'));
-        for (const f of files) {
-          const text = subtitlesToText(fs.readFileSync(path.join(subDir, f), 'utf8'));
-          if (text.length > subtitleText.length) subtitleText = text;
-        }
-      } catch { /* 忽略 */ }
-      subtitleText = subtitleText.slice(0, 6000);
-
-      // 2) 视频（低清 + 限体积），输出到独立子目录，用 %(ext)s 因为合并后可能是 mp4/mkv
-      const dlDir = path.join(dir, 'dl');
-      fs.mkdirSync(dlDir, { recursive: true });
-      const dl = await run(YTDLP, ytdlpArgs([
-        '-f', 'bv*[height<=480]+ba/b[height<=480]/worst',
-        '--max-filesize', String(MAX_DOWNLOAD),
-        '-o', path.join(dlDir, 'video.%(ext)s'), target
-      ]), 180_000);
-      const names = fs.existsSync(dlDir)
-        ? fs.readdirSync(dlDir)
-            .map((name) => path.join(dlDir, name))
-            .sort((a, b) => fs.statSync(b).size - fs.statSync(a).size)
-        : [];
-      const videoFile = pickVideoFile(names);
-      audit({ tool: 'watch', url: target, ok: dl.ok && !!videoFile, stage: 'download', subChars: subtitleText.length });
-      if (!dl.ok || !videoFile) {
-        return { content: [{ type: 'text', text: `视频下载失败（${dl.stderr?.slice(0, 200) || '无输出'}）；字幕${subtitleText ? '已拿到' : '也没有'}。` }], isError: true };
+        meta = await pipe.bili.meta(target);
+      } catch (error) {
+        audit({ tool: 'watch', url: target, ok: false, stage: 'meta', err: String(error?.message ?? error) });
+        return { content: [{ type: 'text', text: `获取元信息失败：${error?.message ?? error}` }], isError: true };
       }
+      const sub = await pipe.bili.subtitles(meta);
+      const subtitleText = String(sub.text || '').slice(0, 20000);
 
-      // 3) 抽帧拼图：fps = 帧数 / 时长，让抽出的帧均匀铺满整段
-      const duration = Number(info.duration) > 0 ? Number(info.duration) : 60;
-      const fps = Math.max(0.01, Math.min(30, want / Math.max(1, duration)));
-      const outJpg = path.join(dir, 'strip.jpg');
-      const ff = await run(FFMPEG, [
-        '-v', 'error', '-y', '-i', videoFile,
-        '-vf', `fps=${fps.toFixed(4)},scale=320:-1:flags=lanczos,tile=${cols}x${rows}:padding=4:margin=4:color=white`,
-        '-frames:v', '1', '-q:v', '4', outJpg
-      ]);
-      if (!ff.ok || !fs.existsSync(outJpg)) {
-        return { content: [{ type: 'text', text: `抽帧失败：${ff.stderr?.slice(0, 200) || 'ffmpeg 无输出'}` }], isError: true };
-      }
+      // 2) 下载（API 优先，失败自动回退 yt-dlp）
+      const dl = await pipe.downloadBili(target, dir);
+      audit({ tool: 'watch', url: target, ok: dl.ok, source: dl.source, bytes: dl.bytes, subChars: subtitleText.length });
+      if (!dl.ok) return { content: [{ type: 'text', text: dl.error }], isError: true };
+
+      // 3) 网格
+      const grid = gridFor(want);
+      const built = await pipe.buildVideoGrid({ file: dl.file, want, strategy: 'overview', dir });
+      if (!built.ok) return { content: [{ type: 'text', text: `抽帧失败：${built.error}` }], isError: true };
 
       const header = [
-        `标题：${info.title ?? '(未知)'}`,
-        `UP 主：${info.uploader ?? '(未知)'}`,
-        `时长：${fmtDuration(duration)}`,
-        `画面：已抽 ${want} 帧拼成 ${cols}×${rows} 网格（行优先 左上→右下，均匀覆盖整段）`,
-        subtitleText
-          ? `字幕：已获取 ${subtitleText.length} 字，全文在下方`
-          : '字幕：没有拿到（B 站 AI 字幕通常需要登录 cookies；纯语音内容会缺失）',
+        `标题：${meta.title}`,
+        `UP 主：${meta.uploader}`,
+        `时长：${fmtDuration(meta.duration)}`,
+        `来源：${dl.source}（${Math.round((dl.bytes || 0) / 1048576)}MB）`,
+        `画面：${want} 帧拼成 ${grid.cols}×${grid.rows} 网格（${built.mode === 'scene' ? '场景变化取帧' : '均匀采样'}）`,
+        subtitleText ? `字幕：已获取 ${subtitleText.length} 字（${(sub.langs || []).slice(0, 3).join('/')}）` : '字幕：没有可用字幕轨',
         subtitleText ? `\n【字幕全文】\n${subtitleText}` : ''
       ].filter(Boolean).join('\n');
 
       return {
         content: [
           { type: 'text', text: header },
-          { type: 'image', data: fs.readFileSync(outJpg).toString('base64'), mimeType: 'image/jpeg' }
+          { type: 'image', data: fs.readFileSync(built.outJpg).toString('base64'), mimeType: 'image/jpeg' }
         ]
       };
     } finally {
