@@ -180,6 +180,7 @@ export function makePipeline({
           return {
             ok: true, outJpg, mode: 'webp-sharp',
             timestamps: [], candidates: viaSharp.pages || 0,
+            width: viaSharp.width, height: viaSharp.height, pages: viaSharp.pages, frames: viaSharp.frames,
             note: `动图 WebP 经 sharp 解码（共 ${viaSharp.pages} 页，取 ${viaSharp.frames} 帧）`
           };
         }
@@ -198,6 +199,7 @@ export function makePipeline({
           return {
             ok: true, outJpg, mode: 'webp-sharp',
             timestamps: [], candidates: viaSharp.pages || 0,
+            width: viaSharp.width, height: viaSharp.height, pages: viaSharp.pages, frames: viaSharp.frames,
             note: `动图 WebP 经 sharp 解码（共 ${viaSharp.pages || '?'} 页，取 ${viaSharp.frames} 帧）`
           };
         }

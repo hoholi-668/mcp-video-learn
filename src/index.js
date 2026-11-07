@@ -305,14 +305,21 @@ server.tool(
 
       audit({ tool: 'media_frames', source: resolved.source, kind, ok: true, frames: want, mode });
 
+      const isSharp = mode === 'webp-sharp';
+      const sizeText = isSharp
+        ? `${built.width}×${built.height}`
+        : `${meta.width}×${meta.height}${meta.frames ? ` · 共 ${meta.frames} 帧` : ''}${meta.durationSec ? ` · ${meta.durationSec} 秒` : ''}`;
+      const frameText = isSharp
+        ? `取帧：sharp 逐帧解码（共 ${built.pages} 页，取 ${built.frames} 帧；ffmpeg 4.x 只能读静态 WebP）`
+        : mode === 'scene'
+          ? `取帧：场景变化检测（${strategy === 'recent' ? 'FIFO 队列最近窗口' : '全程均匀覆盖'}），命中 ${timestamps.length} 个变化点`
+          : '取帧：均匀采样（没有检测到明显的场景切换）';
       const header = [
         `来源：${resolved.source}${resolved.source === 'local' ? `（${path.basename(resolved.file)}）` : ''}`,
-        `类型：${kind}${meta.animated ? '（动图/视频）' : meta.still ? '（静态图）' : ''}`,
-        `尺寸：${meta.width}×${meta.height}${meta.frames ? ` · 共 ${meta.frames} 帧` : ''}${meta.durationSec ? ` · ${meta.durationSec} 秒` : ''}`,
+        `类型：${isSharp ? '动图 WebP（sharp 解码）' : kind + (meta.animated ? '（动图/视频）' : meta.still ? '（静态图）' : '')}`,
+        `尺寸：${sizeText}`,
         `画面：${want} 帧拼成 ${grid.cols}×${grid.rows} 网格（行优先 左上→右下）`,
-        mode === 'scene'
-          ? `取帧：场景变化检测（${strategy === 'recent' ? 'FIFO 队列最近窗口' : '全程均匀覆盖'}），命中 ${timestamps.length} 个变化点`
-          : '取帧：均匀采样（没有检测到明显的场景切换）'
+        frameText
       ].join('\n');
 
       return {

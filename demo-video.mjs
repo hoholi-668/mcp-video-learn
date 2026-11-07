@@ -19,7 +19,8 @@ const env = {
   BILI_COOKIES: '/opt/qq-bridge/bili-cookies.txt',
   VIDEO_COOKIES: '/opt/qq-bridge/bili-cookies.txt',
   VIDEO_ALLOW_ROOTS: '/opt/qq-bridge:/tmp:/root',
-  VIDEO_AUDIT: '/root/.dsh/video-learn-audit.jsonl'
+  VIDEO_AUDIT: '/root/.dsh/video-learn-audit.jsonl',
+  SHARP_MODULE: '/usr/local/lib/node/lib/node_modules/@deepseek-ai/dsh/node_modules/sharp'
 };
 
 const cases = [
