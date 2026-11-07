@@ -281,12 +281,13 @@ server.tool(
       let outJpg = path.join(dir, 'grid.jpg');
       let mode = 'uniform';
       let timestamps = [];
+      let built = null;   // header 里要用，提到块外
 
       // 动图 WebP 也要走 buildVideoGrid：ffmpeg 4.x 只能读静态 WebP，
       // 动图得靠 sharp 逐帧解码（pipeline 里按页数分流）。
       if (kind === 'video' || /\.webp$/i.test(resolved.file)) {
         // 视频：走「场景变化 → FIFO 队列」这条主路，拿不到变化点再退回均匀采样
-        const built = await buildVideoGrid({ file: resolved.file, want, tileWidth, strategy: strategy ?? 'overview', dir });
+        built = await buildVideoGrid({ file: resolved.file, want, tileWidth, strategy: strategy ?? 'overview', dir });
         if (!built.ok) return { content: [{ type: 'text', text: `抽帧失败：${built.error}` }], isError: true };
         outJpg = built.outJpg;
         mode = built.mode;
