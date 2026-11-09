@@ -252,6 +252,115 @@ export function makePipeline({
   }
 
   /** 退路：按时长均匀采样（场景检测拿不到点时用）。 */
+  /** 在给定时间点抽帧拼一张网格（分段模式复用）。 */
+  async function renderAtTimes(file, times, grid, tileWidth, outJpg) {
+    const terms = times
+      .map((t) => `between(t,${Math.max(0, t - 0.02).toFixed(3)},${(t + 0.02).toFixed(3)})`)
+      .join('+');
+    const vf = `select='${terms}',${tileFilter(grid, { tileWidth })}`;
+    const [flag] = await vsyncArgs();
+    const ff = await run(ffmpeg, ['-v', 'error', '-y', '-i', file, '-vf', vf, flag, 'vfr', '-frames:v', '1', '-q:v', '4', outJpg]);
+    if (!ff.ok || !fs.existsSync(outJpg)) return { ok: false, error: ff.stderr?.slice(0, 300) || 'ffmpeg 无输出' };
+    return { ok: true };
+  }
+
+  /** 把 [start,end] 切成 chunks 段（每段边界取两位小数）。 */
+  function planChunks(duration, chunks) {
+    const dur = Number(duration) || 0;
+    const k = Math.max(1, Math.min(Math.round(Number(chunks) || 1), Math.floor(dur / 1.5) || 1));
+    const step = dur / k;
+    const out = [];
+    for (let i = 0; i < k; i += 1) {
+      out.push({
+        index: i + 1,
+        start: Number((i * step).toFixed(2)),
+        end: Number((i === k - 1 ? dur : (i + 1) * step).toFixed(2))
+      });
+    }
+    return out;
+  }
+
+  /** 在 [start,end] 内补齐到 want 个时间点（已有的保留，不够就段内均匀补）。 */
+  function fillTimes(times, want, start, end) {
+    const n = Math.max(1, Math.round(Number(want) || 1));
+    const uniq = [...new Set((times || []).map((t) => Number(Number(t).toFixed(2))))]
+      .filter((t) => Number.isFinite(t) && t >= start - 0.001 && t <= end + 0.001)
+      .sort((a, b) => a - b);
+    if (uniq.length >= n) return uniq.slice(0, n);
+    const merged = [...uniq];
+    const span = Math.max(0.1, end - start);
+    const guard = Math.max(0.05, span / (n * 4));
+    for (let i = 0; i < n && merged.length < n; i += 1) {
+      const t = Number((start + span * ((i + 0.5) / n)).toFixed(2));
+      if (!merged.some((x) => Math.abs(x - t) < guard)) merged.push(t);
+    }
+    let guardRound = 0;
+    while (merged.length < n && guardRound < 50) {
+      merged.push(Number((start + span * ((merged.length + 0.5) / n)).toFixed(2)));
+      guardRound += 1;
+    }
+    merged.sort((a, b) => a - b);
+    return merged.slice(0, n);
+  }
+
+  /**
+   * 分段九宫格：视频按时长切 K 段，每段各出一张网格。
+   *
+   * 为什么分：单张九宫格只覆盖「选出来的 9 个瞬间」，长视频里大部分内容看不到；
+   * 分段后每段都有自己的 9 帧，模型能在同一轮里对比开头/中间/结尾。
+   * 场景变化点只算一次，按区间分配给各段；某段没有变化点就在段内均匀铺。
+   */
+  async function buildVideoGridChunks({ file, wantPerChunk, chunks, tileWidth = 240, strategy = 'overview', dir }) {
+    const meta = describeProbe(await probeMedia(file));
+    const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
+    const want = Math.max(2, Math.min(12, Math.round(Number(wantPerChunk) || 9)));
+    const grid = gridForFrames(want);
+
+    if (!duration || chunks <= 1) {
+      const one = await buildVideoGrid({ file, want, tileWidth, strategy, dir });
+      if (!one.ok) return one;
+      return {
+        ...one,
+        grids: [{ index: 1, start: 0, end: duration, times: one.timestamps || [], outJpg: one.outJpg, mode: one.mode, candidates: one.candidates || 0 }],
+        duration
+      };
+    }
+
+    const ranges = planChunks(duration, chunks);
+    let candidates = [];
+    for (const threshold of [20, 10, 5]) {
+      candidates = await sceneCandidates(file, { minScore: threshold });
+      if (candidates.length >= 2) break;
+    }
+
+    const grids = [];
+    for (const range of ranges) {
+      const { start, end, index } = range;
+      const inRange = candidates.filter((c) => c.t >= start && c.t < (index === ranges.length ? duration + 1 : end));
+      const picked = inRange.length >= 2 ? pickTimestamps(inRange, want, strategy) : [];
+      const times = fillTimes(picked, want, start, end);
+      const outJpg = path.join(dir, `grid-${index}.jpg`);
+      const rendered = await renderAtTimes(file, times, grid, tileWidth, outJpg);
+      if (!rendered.ok) return { ok: false, error: `第 ${index} 段抽帧失败：${rendered.error}` };
+      grids.push({
+        index, start, end, times, outJpg,
+        mode: inRange.length >= 2 ? 'scene' : 'uniform',
+        candidates: inRange.length
+      });
+    }
+
+    return {
+      ok: true,
+      mode: 'chunks',
+      grids,
+      candidates: candidates.length,
+      duration,
+      width: meta.width,
+      height: meta.height,
+      frames: meta.frames
+    };
+  }
+
   async function uniformGrid({ file, want, tileWidth, grid, outJpg }) {
     const meta = describeProbe(await probeMedia(file));
     const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
@@ -375,7 +484,7 @@ export function makePipeline({
     }
   }
 
-  return { run, probeMedia, sceneCandidates, buildVideoGrid, downloadDirect, downloadBili, biliApiInfo, bili, ffmpeg, ffprobe, ytdlp };
+  return { run, probeMedia, sceneCandidates, buildVideoGrid, buildVideoGridChunks, planChunks, fillTimes, downloadDirect, downloadBili, biliApiInfo, bili, ffmpeg, ffprobe, ytdlp };
 }
 
 

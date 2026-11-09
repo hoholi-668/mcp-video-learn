@@ -36,6 +36,17 @@ const text = (value, isError = false) => ({
   ...(isError ? { isError: true } : {})
 });
 
+/** 秒 → m:ss / h:mm:ss，分段标签用。 */
+const fmtClock = (sec) => {
+  const total = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const ss = total % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+    : `${m}:${String(ss).padStart(2, '0')}`;
+};
+
 const YTDLP = process.env.VIDEO_YTDLP || 'yt-dlp';
 const FFMPEG = process.env.VIDEO_FFMPEG || 'ffmpeg';
 const COOKIES = process.env.VIDEO_COOKIES
@@ -164,6 +175,7 @@ async function resolveMedia(input, dir) {
  */
 async function sceneCandidates(file, opts = {}) { return pipe.sceneCandidates(file, opts); }
 async function buildVideoGrid(args) { return pipe.buildVideoGrid(args); }
+async function buildVideoGridChunks(args) { return pipe.buildVideoGridChunks(args); }
 
 const server = new McpServer({ name: 'video-learn', version: '0.3.0' });
 
@@ -292,15 +304,18 @@ server.tool(
 server.tool(
   'media_frames',
   '把任意“动的东西”变成模型能看懂的帧网格：本地 GIF/WebP/视频、媒体直链、或 B 站链接。'
-  + '适合识别动图表情包、看短视频、检查本地素材。返回元信息（尺寸/帧数/时长）+ 一张网格图。',
+  + '适合识别动图表情包、看短视频、检查本地素材。返回元信息（尺寸/帧数/时长）+ 一张网格图；'
+  + '长视频可以传 chunks=N 分段，每段各一张网格，一次看完开头/中间/结尾。',
   {
     input: z.string().describe('本地路径、媒体直链（.gif/.webp/.mp4…）或 B 站链接'),
     frames: z.number().int().min(1).max(12).optional().describe('抽几帧；动图默认 6，视频默认 9'),
     tileWidth: z.number().int().min(64).max(640).optional().describe('每帧宽度（像素），默认 240'),
     strategy: z.enum(['overview', 'recent']).optional()
-      .describe('视频取帧策略：overview 均匀覆盖全程（默认）；recent 取最近 N 个变化瞬间（FIFO 队列快照）')
+      .describe('视频取帧策略：overview 均匀覆盖全程（默认）；recent 取最近 N 个变化瞬间（FIFO 队列快照）'),
+    chunks: z.number().int().min(1).max(6).optional()
+      .describe('把视频切成几段、每段各出一张网格（默认 1）。长视频用 3~6，能同时看到开头/中间/结尾')
   },
-  async ({ input, frames, tileWidth, strategy }) => {
+  async ({ input, frames, tileWidth, strategy, chunks }) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'video-learn-'));
     try {
       const resolved = await resolveMedia(input, dir);
@@ -321,6 +336,28 @@ server.tool(
 
       // 动图 WebP 也要走 buildVideoGrid：ffmpeg 4.x 只能读静态 WebP，
       // 动图得靠 sharp 逐帧解码（pipeline 里按页数分流）。
+      const chunkCount = Math.max(1, Math.min(6, Math.round(Number(chunks) || 1)));
+      if (kind === 'video' && chunkCount > 1) {
+        const multi = await buildVideoGridChunks({
+          file: resolved.file, wantPerChunk: want, chunks: chunkCount, tileWidth, strategy: strategy ?? 'overview', dir
+        });
+        if (!multi.ok) return { content: [{ type: 'text', text: `抽帧失败：${multi.error}` }], isError: true };
+        audit({ tool: 'media_frames', source: resolved.source, kind, ok: true, frames: want, mode: 'chunks', chunks: multi.grids.length });
+        const header = [
+          `来源：${resolved.source}${resolved.source === 'local' ? `（${path.basename(resolved.file)}）` : ''}`,
+          `类型：${kind}${meta.animated ? '（动图/视频）' : ''}`,
+          `尺寸：${meta.width}×${meta.height}${meta.frames ? ` · 共 ${meta.frames} 帧` : ''}${meta.durationSec ? ` · ${meta.durationSec} 秒` : ''}`,
+          `分段：${multi.grids.length} 段，每段 ${want} 帧，共 ${multi.grids.length * want} 帧（行优先 左上→右下）`
+        ].join('\n');
+        const content = [{ type: 'text', text: header }];
+        for (const g of multi.grids) {
+          const tag = g.mode === 'scene' ? `场景变化，命中 ${g.candidates} 个变化点` : '段内均匀采样';
+          content.push({ type: 'text', text: `[第 ${g.index} 段 ${fmtClock(g.start)}-${fmtClock(g.end)}]（${tag}）` });
+          content.push({ type: 'image', data: fs.readFileSync(g.outJpg).toString('base64'), mimeType: 'image/jpeg' });
+        }
+        return { content };
+      }
+
       if (kind === 'video' || /\.webp$/i.test(resolved.file)) {
         // 视频：走「场景变化 → FIFO 队列」这条主路，拿不到变化点再退回均匀采样
         built = await buildVideoGrid({ file: resolved.file, want, tileWidth, strategy: strategy ?? 'overview', dir });
