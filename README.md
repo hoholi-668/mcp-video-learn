@@ -237,6 +237,8 @@ export SHARP_MODULE=/path/to/node_modules/sharp
 | `VIDEO_MAX_MB` | `60` | 单次下载体积上限（MB） |
 | `VIDEO_ALLOW_ROOTS` | 当前目录 + 临时目录 | `media_frames` 允许读取的本地目录（路径分隔符分隔） |
 | `SHARP_MODULE` | — | 复用宿主已装的 sharp |
+| `XDG_CACHE_HOME` | `~/.cache` | 审计日志默认目录的上级（`$XDG_CACHE_HOME/mcp-video-learn/`） |
+| `XDG_CONFIG_HOME` | `~/.config` | 默认 cookies 路径的上级（`$XDG_CONFIG_HOME/mcp-video-learn/cookies.txt`） |
 
 ---
 
