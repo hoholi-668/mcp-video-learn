@@ -8,15 +8,17 @@
 
 ---
 
-## 它提供三个工具
+## 它提供四个工具
 
 | 工具 | 做什么 | 输入 |
 |---|---|---|
+| `bili_search` | **按标题搜 B 站**，返回 bvid/UP/时长 | 关键词（视频标题） |
 | `bili_video_info` | 只看元信息，不下载 | B 站链接 |
 | `bili_video_watch` | 看 B 站视频：下载 → 抽帧 → 字幕 | B 站链接 |
 | `media_frames` | 看**任意**动的东西：本地文件 / 直链 / B 站 | 路径、URL、B 站链接 |
 
 ```
+只有标题没链接   → bili_search("视频标题") 拿到 bvid，再 bili_video_watch
 判断值不值得看 → bili_video_info
 看视频讲什么   → bili_video_watch
 识别表情包     → media_frames("C:/stickers/怼脸.gif")
@@ -72,6 +74,25 @@ node src/index.js
 ```
 
 ---
+
+## 只有标题、没有链接怎么办
+
+QQ 里分享 B 站视频时，常常只来一个**小程序卡片**——里面只有标题和封面，没有视频地址。
+（小程序短链 `m.q.qq.com/a/s/...` 是给手机打开 App 用的，抓不到 bvid。）
+
+这时用 `bili_search`：
+
+```
+用户：这个视频讲了什么（发来一张卡片，标题「这个画面我幻想了无数次」）
+你：  bili_search(keyword="这个画面我幻想了无数次")
+     → BV1X9446NEMz / 落叶也会下雨 / 1:01
+     bili_video_watch("https://www.bilibili.com/video/BV1X9446NEMz")
+     → 抽帧 + 字幕
+```
+
+**搜索有歧义时**：结果里可能有多条同名视频，先报标题/UP/时长让用户确认，再决定看哪个。
+
+> 如果你的宿主（如 qq-bridge）支持解析卡片，标题会自动出现在消息里，直接拿来搜即可。
 
 ## 支持哪些格式（先看这张表）
 
