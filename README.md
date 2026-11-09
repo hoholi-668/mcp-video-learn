@@ -25,29 +25,51 @@
 
 ---
 
-## 30 秒上手
+## 安装（从 GitHub）
+
+> **本项目没有发布到 npm。** 别用 `npm install -g mcp-video-learn`（会 404）。
 
 ```bash
 # 1. 依赖：ffmpeg 必须在 PATH 里
 ffmpeg -version
 
-# 2. 安装
-npm install -g mcp-video-learn
+# 2. 拉代码
+git clone https://github.com/hoholi-668/mcp-video-learn.git
+cd mcp-video-learn
+npm install --omit=optional          # sharp 是可选依赖，不装也能用
 
-# 3. 接到你的 MCP 客户端（以 DSH 为例）
+# 3. 试跑（出现 ready 就说明能启动）
+node src/index.js
 ```
+
+接到 MCP 客户端（以 DSH 为例）：
 
 ```yaml
 - id: mcp-video-learn
-  name: '@deepseek-ai/dsh-mcp'
+  name: '@deepseek-ai/dsh-mcp-client'
   config:
-    command: npx
-    args: ['-y', 'mcp-video-learn']
+    serverName: video-learn
+    transport: stdio
+    command: node
+    args: ['/绝对路径/mcp-video-learn/src/index.js']
     env:
       VIDEO_FFMPEG: /usr/bin/ffmpeg
+      # 可选：B 站登录态（更高码率 / 受限视频）
+      BILI_COOKIES: /path/to/bili-cookies.txt
 ```
 
-> 其它客户端（Claude Desktop 等）同理：`command` + `args` 指向本服务即可。
+> 其它 MCP 客户端（Claude Desktop / Cursor 等）同理：`command` 指向 node，
+> `args` 指向 `src/index.js` 的**绝对路径**。
+
+### 第一次用怎么开口
+
+装好之后**不用记工具名**，直接说人话：
+
+```
+这个视频讲了什么 https://www.bilibili.com/video/BVxxxxxxx
+帮我看看这个文件是什么 D:\clips\demo.mp4
+这个动图里是什么 C:\stickers\blink.webp
+```
 
 ---
 
