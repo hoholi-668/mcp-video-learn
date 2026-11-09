@@ -30,6 +30,12 @@ import { makePipeline } from './pipeline.js';
 
 const pipe = makePipeline();
 
+/** 统一的工具返回：字符串直接给，对象转 JSON。 */
+const text = (value, isError = false) => ({
+  content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
+  ...(isError ? { isError: true } : {})
+});
+
 const YTDLP = process.env.VIDEO_YTDLP || 'yt-dlp';
 const FFMPEG = process.env.VIDEO_FFMPEG || 'ffmpeg';
 const COOKIES = process.env.VIDEO_COOKIES
@@ -249,6 +255,36 @@ server.tool(
       };
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+);
+
+server.tool(
+  'bili_search',
+  '按关键词搜 B 站视频，返回 bvid + 标题 + UP 主 + 时长。'
+  + '用户只给了标题/一句描述、没给链接时用（例如分享卡片只显示标题）；'
+  + '拿到 bvid 后再用 bili_video_watch 看内容。',
+  {
+    keyword: z.string().describe('搜索关键词，通常是视频标题'),
+    limit: z.number().int().min(1).max(10).optional().describe('返回几条，默认 5')
+  },
+  async ({ keyword, limit }) => {
+    try {
+      const body = await pipe.bili.api('https://api.bilibili.com/x/web-interface/wbi/search/type', {
+        search_type: 'video', keyword, page: 1
+      });
+      if (body?.code !== 0) return text({ failed: true, code: body?.code, message: body?.message ?? '' }, true);
+      const list = (body.data?.result || []).slice(0, limit ?? 5).map((v) => ({
+        bvid: v.bvid,
+        title: String(v.title || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim(),
+        author: String(v.author || ''),
+        duration: String(v.duration || ''),
+        play: v.play ?? null
+      }));
+      audit({ tool: 'search', keyword, count: list.length, ok: true });
+      return text({ keyword, count: list.length, results: list });
+    } catch (error) {
+      return text(`搜索失败：${error?.message ?? error}`, true);
     }
   }
 );
