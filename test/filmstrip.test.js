@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FrameQueue, shouldAdmit, spreadPick, feedQueue, pickTimestamps } from '../src/filmstrip.js';
+import { FrameQueue, shouldAdmit, medianScore, spreadPick, feedQueue, pickTimestamps } from '../src/filmstrip.js';
 
 test('队列满了就淘汰最旧的（FIFO）', () => {
   const q = new FrameQueue(3);
@@ -15,15 +15,28 @@ test('队列满了就淘汰最旧的（FIFO）', () => {
   assert.equal(q.size, 3);
 });
 
-test('准入：没满先填满，满了才看变化分', () => {
+test('准入：没满先填满，满了用「队内中位数」做相对门槛', () => {
   const q = new FrameQueue(2);
-  assert.equal(shouldAdmit(q, 0), true);       // 空队列，再差的帧也收
-  q.push({ t: 1 });
-  assert.equal(shouldAdmit(q, 0), true);       // 未满
-  q.push({ t: 2 });
+  assert.equal(shouldAdmit(q, 0), true);          // 空队列，再差的帧也收
+  q.push({ t: 1, score: 20 });
+  assert.equal(shouldAdmit(q, 0), true);          // 未满
+  q.push({ t: 2, score: 40 });
   assert.equal(q.full, true);
-  assert.equal(shouldAdmit(q, 0.1), false);    // 满了且变化小 → 不收
-  assert.equal(shouldAdmit(q, 0.9), true);     // 变化大 → 收
+  assert.equal(medianScore(q), 30);               // (20+40)/2
+  assert.equal(shouldAdmit(q, 10), false);        // 比中位数弱 → 不收
+  assert.equal(shouldAdmit(q, 30), true);         // 等于中位数 → 收（平手让新的进来）
+  assert.equal(shouldAdmit(q, 90), true);         // 更强 → 收
+});
+
+test('相对门槛会随素材基线自适应', () => {
+  // 高基线素材：中位数 120，弱变化 40 被拒
+  const hi = new FrameQueue(3);
+  [{ s: 100 }, { s: 120 }, { s: 140 }].forEach((x, i) => hi.push({ t: i, score: x.s }));
+  assert.equal(shouldAdmit(hi, 40), false);
+  // 低基线素材：中位数 8，同样的 40 就能进
+  const lo = new FrameQueue(3);
+  [{ s: 4 }, { s: 8 }, { s: 12 }].forEach((x, i) => lo.push({ t: i, score: x.s }));
+  assert.equal(shouldAdmit(lo, 40), true);
 });
 
 test('overview：均匀摊开、不偏向结尾', () => {

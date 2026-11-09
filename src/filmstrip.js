@@ -38,12 +38,31 @@ export class FrameQueue {
 }
 
 /**
- * 准入判断：画面变化分 ≥ 阈值才值得入队。
- * 但队列没满时放宽——宁可先填满，也别让 9 格空着。
+ * 队内变化分的中位数（偶数个取中间两个的平均）。
+ * 相对门槛用它：不同视频的亮度/色差基线差别很大，绝对阈值没法通用。
  */
-export function shouldAdmit(queue, sceneScore, { minScore = 0.25 } = {}) {
+export function medianScore(queue) {
+  const arr = queue.snapshot().map((x) => Number(x?.score) || 0).sort((a, b) => a - b);
+  if (!arr.length) return 0;
+  const mid = Math.floor(arr.length / 2);
+  return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+}
+
+/**
+ * 准入判断：队列没满时先填满；满了之后只收「不弱于队内中位数」的变化点。
+ *
+ * 为什么用相对阈值：sceneCandidates 的分数是 0~255 的 Y/U/V 差分均值，
+ * 不同素材（夜景/雪景/幻灯片）基线差很多，写死一个绝对阈值要么全收要么全拒。
+ * 取中位数 = 每次替换都要求「比队里一半以上的帧变化更明显」。
+ *
+ * @param {number} [opts.minScore] 可选的绝对下限（默认 0，不启用）
+ */
+export function shouldAdmit(queue, sceneScore, { minScore = 0 } = {}) {
   if (!queue.full) return true;
-  return Number(sceneScore) >= minScore;
+  const score = Number(sceneScore) || 0;
+  const floor = Number(minScore) || 0;
+  if (score < floor) return false;
+  return score >= medianScore(queue);
 }
 
 /**
@@ -87,7 +106,7 @@ export function feedQueue(candidates, capacity, { minScore = 0.25 } = {}) {
  * @param {number} n 需要几帧
  * @param {'overview'|'recent'} strategy
  */
-export function pickTimestamps(candidates, n, strategy = 'overview', { minScore = 0.25 } = {}) {
+export function pickTimestamps(candidates, n, strategy = 'overview', { minScore = 0 } = {}) {
   const list = (Array.isArray(candidates) ? candidates : []).filter((c) => Number.isFinite(Number(c?.t)));
   if (!list.length) return [];
   if (strategy === 'recent') {
