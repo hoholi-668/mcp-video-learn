@@ -14,7 +14,7 @@
 |---|---|---|
 | `bili_search` | **按标题搜 B 站**，返回 bvid/UP/时长 | 关键词（视频标题） |
 | `bili_video_info` | 只看元信息，不下载 | B 站链接 |
-| `bili_video_watch` | 看 B 站视频：下载 → 抽帧 → 字幕 | B 站链接 |
+| `bili_video_watch` | 看 B 站视频：下载 → 抽帧 → 字幕；长视频可 `chunks=N` 分段 | B 站链接 |
 | `media_frames` | 看**任意**动的东西：本地文件 / 直链 / B 站；长视频可 `chunks=N` 分段 | 路径、URL、B 站链接 |
 
 ```
@@ -100,8 +100,12 @@ QQ 里分享 B 站视频时，常常只来一个**小程序卡片**——里面�
 
 传 `chunks=N`（1~6）就能把视频切成 N 段，**每段各出一张九宫格**，一次工具调用全部返回：
 
+`media_frames` 和 `bili_video_watch` 都支持（B 站视频别先 watch 再 media_frames，
+一次带 `chunks` 就够，省一次下载和一遍 token）：
+
 ```
 media_frames("D:/clips/lecture.mp4", frames=9, chunks=3)
+bili_video_watch("https://www.bilibili.com/video/BVxxxx", frames=9, chunks=4)
 
 返回：
   来源 / 类型 / 尺寸 / 分段：3 段，每段 9 帧，共 27 帧
@@ -121,6 +125,7 @@ media_frames("D:/clips/lecture.mp4", frames=9, chunks=3)
 | `chunks` | 1 | 分几段；超过时长允许值会自动减少（每段至少 1.5 秒） |
 | `frames` | 9 | **每段**几帧 |
 | 上限 | 6 段 × 12 帧 | 超过按上限截断，避免一次塞几十张图 |
+| `tileWidth` | 400 | 每帧宽度；**会自动钳到源视频宽度**，小视频不放大 |
 
 > 分段模式只在视频上生效；GIF / 动图 WebP 仍然是一张图（它们本身就是短循环）。
 

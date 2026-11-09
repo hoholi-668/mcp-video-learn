@@ -162,10 +162,12 @@ export function makePipeline({
    * 主路径：场景变化 → FIFO 队列（overview/recent 两种取用），不足 want 时用均匀点补齐
    * 退路：场景检测拿不到点时按 fps 均匀采样
    */
-  async function buildVideoGrid({ file, want, tileWidth = 240, strategy = 'overview', dir }) {
+  async function buildVideoGrid({ file, want, tileWidth = 400, strategy = 'overview', dir }) {
     const grid = gridForFrames(want);
     const outJpg = path.join(dir, 'grid.jpg');
     const meta = describeProbe(await probeMedia(file));
+    // 小视频别放大：tile 宽度不超过源宽，否则只是把像素拉糊还更占体积
+    const tile = Math.max(64, Math.min(Number(tileWidth) || 400, Number(meta.width) || 400));
     const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
 
     // 动图 WebP：ffmpeg 4.x 只能读出第一帧（甚至 0×0），所以优先问 sharp 有几页；
@@ -174,7 +176,7 @@ export function makePipeline({
       const pages = await webpPages(file);
       if (pages > 1) {
         const viaSharp = await webpGridWithSharp({
-          file, want, cols: grid.cols, rows: grid.rows, tileWidth, outJpg
+          file, want, cols: grid.cols, rows: grid.rows, tile, outJpg
         });
         if (viaSharp.ok) {
           return {
@@ -193,7 +195,7 @@ export function makePipeline({
     if (meta.width <= 0 || meta.height <= 0) {
       if (/\.webp$/i.test(String(file))) {
         const viaSharp = await webpGridWithSharp({
-          file, want, cols: grid.cols, rows: grid.rows, tileWidth, outJpg
+          file, want, cols: grid.cols, rows: grid.rows, tile, outJpg
         });
         if (viaSharp.ok) {
           return {
@@ -212,7 +214,7 @@ export function makePipeline({
     }
 
     // 只要 1 帧 → 均匀采样即可，场景检测没有意义
-    if (want < 2) return uniformGrid({ file, want, tileWidth, grid, outJpg });
+    if (want < 2) return uniformGrid({ file, want, tileWidth: tile, grid, outJpg });
 
     // 阈值逐级放宽：0.25 抓硬切，画面差异小的素材（同色系、渐变）会漏。
     // 每一级都比上一级多抓一些点，抓到 ≥2 个就停。
@@ -224,7 +226,7 @@ export function makePipeline({
     // 变化点少于 2 个 = 这段素材确实没有镜头切换（纯色、单图、极短），
     // 这时补帧也只是假装在“按场景取”，不如老实走均匀采样。
     if (candidates.length < 2) {
-      const plain = await uniformGrid({ file, want, tileWidth, grid, outJpg });
+      const plain = await uniformGrid({ file, want, tileWidth: tile, grid, outJpg });
       return { ...plain, candidates: candidates.length };
     }
     const picked = pickTimestamps(candidates, want, strategy);
@@ -234,7 +236,7 @@ export function makePipeline({
       const terms = times
         .map((t) => `between(t,${Math.max(0, t - 0.02).toFixed(3)},${(t + 0.02).toFixed(3)})`)
         .join('+');
-      const vf = `select='${terms}',${tileFilter(grid, { tileWidth })}`;
+      const vf = `select='${terms}',${tileFilter(grid, { tileWidth: tile })}`;
       const [flag] = await vsyncArgs();
       const ff = await run(ffmpeg, ['-v', 'error', '-y', '-i', file, '-vf', vf, flag, 'vfr', '-frames:v', '1', '-q:v', '4', outJpg]);
       if (ff.ok && fs.existsSync(outJpg)) {
@@ -242,22 +244,22 @@ export function makePipeline({
       }
       // 场景路径失败时把 stderr 带回去，方便排查，而不是静默退回均匀采样
       const sceneError = ff.stderr?.slice(0, 300) || 'ffmpeg 无输出';
-      const fallback = await uniformGrid({ file, want, tileWidth, grid, outJpg });
+      const fallback = await uniformGrid({ file, want, tileWidth: tile, grid, outJpg });
       return fallback.ok
         ? { ...fallback, sceneError, candidates: candidates.length }
         : { ok: false, error: sceneError };
     }
 
-    return uniformGrid({ file, want, tileWidth, grid, outJpg });
+    return uniformGrid({ file, want, tileWidth: tile, grid, outJpg });
   }
 
   /** 退路：按时长均匀采样（场景检测拿不到点时用）。 */
   /** 在给定时间点抽帧拼一张网格（分段模式复用）。 */
-  async function renderAtTimes(file, times, grid, tileWidth, outJpg) {
+  async function renderAtTimes(file, times, grid, tile, outJpg) {
     const terms = times
       .map((t) => `between(t,${Math.max(0, t - 0.02).toFixed(3)},${(t + 0.02).toFixed(3)})`)
       .join('+');
-    const vf = `select='${terms}',${tileFilter(grid, { tileWidth })}`;
+    const vf = `select='${terms}',${tileFilter(grid, { tileWidth: tile })}`;
     const [flag] = await vsyncArgs();
     const ff = await run(ffmpeg, ['-v', 'error', '-y', '-i', file, '-vf', vf, flag, 'vfr', '-frames:v', '1', '-q:v', '4', outJpg]);
     if (!ff.ok || !fs.existsSync(outJpg)) return { ok: false, error: ff.stderr?.slice(0, 300) || 'ffmpeg 无输出' };
@@ -310,14 +312,15 @@ export function makePipeline({
    * 分段后每段都有自己的 9 帧，模型能在同一轮里对比开头/中间/结尾。
    * 场景变化点只算一次，按区间分配给各段；某段没有变化点就在段内均匀铺。
    */
-  async function buildVideoGridChunks({ file, wantPerChunk, chunks, tileWidth = 240, strategy = 'overview', dir }) {
+  async function buildVideoGridChunks({ file, wantPerChunk, chunks, tileWidth = 400, strategy = 'overview', dir }) {
     const meta = describeProbe(await probeMedia(file));
+    const tile = Math.max(64, Math.min(Number(tileWidth) || 400, Number(meta.width) || 400));
     const duration = meta.durationSec > 0.05 ? meta.durationSec : 0;
     const want = Math.max(2, Math.min(12, Math.round(Number(wantPerChunk) || 9)));
     const grid = gridForFrames(want);
 
     if (!duration || chunks <= 1) {
-      const one = await buildVideoGrid({ file, want, tileWidth, strategy, dir });
+      const one = await buildVideoGrid({ file, want, tileWidth: tile, strategy, dir });
       if (!one.ok) return one;
       return {
         ...one,
@@ -340,7 +343,7 @@ export function makePipeline({
       const picked = inRange.length >= 2 ? pickTimestamps(inRange, want, strategy) : [];
       const times = fillTimes(picked, want, start, end);
       const outJpg = path.join(dir, `grid-${index}.jpg`);
-      const rendered = await renderAtTimes(file, times, grid, tileWidth, outJpg);
+      const rendered = await renderAtTimes(file, times, grid, tile, outJpg);
       if (!rendered.ok) return { ok: false, error: `第 ${index} 段抽帧失败：${rendered.error}` };
       grids.push({
         index, start, end, times, outJpg,

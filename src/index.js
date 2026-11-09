@@ -220,9 +220,15 @@ server.tool(
 server.tool(
   'bili_video_watch',
   '真正“看”一个 B 站视频：走官方 API 下载低清流（机房 IP 也可用）→ 抽 N 帧拼成网格 + 字幕文本。'
-  + '适合回答“这个视频讲了什么”。注意：只有字幕能反映台词/讲解，纯语音内容会缺失。',
-  { url: z.string().describe('B 站链接'), frames: z.number().int().min(4).max(12).optional().describe('抽几帧，默认 9') },
-  async ({ url, frames }) => {
+  + '适合回答“这个视频讲了什么”。chunks=N 可分段，每段各一张网格 + 字幕全文。'
+  + '注意：只有字幕能反映台词/讲解，纯语音内容会缺失。',
+  {
+    url: z.string().describe('B 站链接'),
+    frames: z.number().int().min(4).max(12).optional().describe('每段抽几帧，默认 9'),
+    chunks: z.number().int().min(1).max(6).optional()
+      .describe('把视频切成几段、每段各出一张网格（默认 1）。长视频用 3~6，一次看完开头/中间/结尾')
+  },
+  async ({ url, frames, chunks }) => {
     const target = normalizeBiliUrl(url);
     if (!target) return { content: [{ type: 'text', text: '拒绝：只支持 bilibili.com / b23.tv 链接' }], isError: true };
     const want = pickFrames('video', frames);
@@ -244,16 +250,41 @@ server.tool(
       audit({ tool: 'watch', url: target, ok: dl.ok, source: dl.source, bytes: dl.bytes, subChars: subtitleText.length });
       if (!dl.ok) return { content: [{ type: 'text', text: dl.error }], isError: true };
 
-      // 3) 网格
-      const grid = gridFor(want);
-      const built = await pipe.buildVideoGrid({ file: dl.file, want, strategy: 'overview', dir });
-      if (!built.ok) return { content: [{ type: 'text', text: `抽帧失败：${built.error}` }], isError: true };
-
-      const header = [
+      // 3) 网格（chunks>1 时每段各一张）
+      const chunkCount = Math.max(1, Math.min(6, Math.round(Number(chunks) || 1)));
+      const baseHeader = [
         `标题：${meta.title}`,
         `UP 主：${meta.uploader}`,
         `时长：${fmtDuration(meta.duration)}`,
-        `来源：${dl.source}（${Math.round((dl.bytes || 0) / 1048576)}MB）`,
+        `来源：${dl.source}（${Math.round((dl.bytes || 0) / 1048576)}MB）`
+      ];
+
+      if (chunkCount > 1) {
+        const multi = await buildVideoGridChunks({
+          file: dl.file, wantPerChunk: want, chunks: chunkCount, tileWidth: 400, strategy: 'overview', dir
+        });
+        if (!multi.ok) return { content: [{ type: 'text', text: `抽帧失败：${multi.error}` }], isError: true };
+        const head = [
+          ...baseHeader,
+          `分段：${multi.grids.length} 段，每段 ${want} 帧，共 ${multi.grids.length * want} 帧（行优先 左上→右下）`,
+          subtitleText ? `字幕：已获取 ${subtitleText.length} 字（${(sub.langs || []).slice(0, 3).join('/')}）` : '字幕：没有可用字幕轨'
+        ].join('\n');
+        const content = [{ type: 'text', text: head }];
+        for (const g of multi.grids) {
+          const tag = g.mode === 'scene' ? `场景变化，命中 ${g.candidates} 个变化点` : '段内均匀采样';
+          content.push({ type: 'text', text: `[第 ${g.index} 段 ${fmtClock(g.start)}-${fmtClock(g.end)}]（${tag}）` });
+          content.push({ type: 'image', data: fs.readFileSync(g.outJpg).toString('base64'), mimeType: 'image/jpeg' });
+        }
+        if (subtitleText) content.push({ type: 'text', text: `\n【字幕全文】\n${subtitleText}` });
+        return { content };
+      }
+
+      const grid = gridFor(want);
+      const built = await pipe.buildVideoGrid({ file: dl.file, want, tileWidth: 400, strategy: 'overview', dir });
+      if (!built.ok) return { content: [{ type: 'text', text: `抽帧失败：${built.error}` }], isError: true };
+
+      const header = [
+        ...baseHeader,
         `画面：${want} 帧拼成 ${grid.cols}×${grid.rows} 网格（${built.mode === 'scene' ? '场景变化取帧' : '均匀采样'}）`,
         subtitleText ? `字幕：已获取 ${subtitleText.length} 字（${(sub.langs || []).slice(0, 3).join('/')}）` : '字幕：没有可用字幕轨',
         subtitleText ? `\n【字幕全文】\n${subtitleText}` : ''
@@ -309,7 +340,7 @@ server.tool(
   {
     input: z.string().describe('本地路径、媒体直链（.gif/.webp/.mp4…）或 B 站链接'),
     frames: z.number().int().min(1).max(12).optional().describe('抽几帧；动图默认 6，视频默认 9'),
-    tileWidth: z.number().int().min(64).max(640).optional().describe('每帧宽度（像素），默认 240'),
+    tileWidth: z.number().int().min(64).max(640).optional().describe('每帧宽度（像素），默认 400；画面里的字看不清就调大'),
     strategy: z.enum(['overview', 'recent']).optional()
       .describe('视频取帧策略：overview 均匀覆盖全程（默认）；recent 取最近 N 个变化瞬间（FIFO 队列快照）'),
     chunks: z.number().int().min(1).max(6).optional()
@@ -339,7 +370,7 @@ server.tool(
       const chunkCount = Math.max(1, Math.min(6, Math.round(Number(chunks) || 1)));
       if (kind === 'video' && chunkCount > 1) {
         const multi = await buildVideoGridChunks({
-          file: resolved.file, wantPerChunk: want, chunks: chunkCount, tileWidth, strategy: strategy ?? 'overview', dir
+          file: resolved.file, wantPerChunk: want, chunks: chunkCount, tileWidth: tileWidth ?? 400, strategy: strategy ?? 'overview', dir
         });
         if (!multi.ok) return { content: [{ type: 'text', text: `抽帧失败：${multi.error}` }], isError: true };
         audit({ tool: 'media_frames', source: resolved.source, kind, ok: true, frames: want, mode: 'chunks', chunks: multi.grids.length });
