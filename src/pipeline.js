@@ -460,31 +460,49 @@ export function makePipeline({
 
   /** B 站下载：先走官方 API（机房 IP 也能用），失败再退回 yt-dlp。 */
   async function downloadBili(url, dir) {
-    // ① 官方 API 通道
-    try {
-      await bili.ensureBuvid?.();
-      const m = await bili.meta(url);
-      const dest = path.join(dir, 'bili.mp4');
-      const dl = await bili.download(m, dest);
-      return { ok: true, file: dest, source: 'bilibili-api', meta: m, bytes: dl.bytes };
-    } catch (apiError) {
-      // ② 退路：yt-dlp（需要能访问网页，家宽/代理环境下可用）
-      const dlDir = path.join(dir, 'dl');
-      fs.mkdirSync(dlDir, { recursive: true });
-      const cookieFile = biliCookiesFile && fs.existsSync(biliCookiesFile) ? biliCookiesFile : '';
-      const args = ['--ffmpeg-location', path.dirname(ffmpeg),
-        ...buildBiliDlpArgs({ cookieFile, maxDownload, outTemplate: path.join(dlDir, 'media.%(ext)s'), url })];
-      const dl = await run(ytdlp, args, 180_000);
-      if (!dl.ok) {
-        return {
-          ok: false,
-          error: `B 站下载失败：API ${String(apiError?.message ?? apiError).slice(0, 120)}；yt-dlp ${dl.stderr.slice(0, 160)}`
-        };
+    // ① 官方 API 通道：失败先重试一次。
+    //    网关侧偶尔在刷新 cookie 文件（非原子写）时被读到半截，导致这一两次 aliy 鉴权失败；
+    //    隔一秒重试通常就好了，没必要立刻退到注定被 412 的 yt-dlp。
+    let apiError = null;
+    let apiAttempts = 0;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      apiAttempts = attempt;
+      try {
+        await bili.ensureBuvid?.();
+        const m = await bili.meta(url);
+        const dest = path.join(dir, 'bili.mp4');
+        const dl = await bili.download(m, dest);
+        return { ok: true, file: dest, source: 'bilibili-api', meta: m, bytes: dl.bytes, apiAttempts };
+      } catch (error) {
+        apiError = error;
+        if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      const names = fs.readdirSync(dlDir).map((n) => path.join(dlDir, n));
-      const file = pickVideoFile(names);
-      return file ? { ok: true, file, source: 'yt-dlp' } : { ok: false, error: '下载后没找到视频文件' };
     }
+
+    // ② 退路：yt-dlp（需要能访问网页；机房 IP 经常被 412 拦，所以它只是兜底）
+    const dlDir = path.join(dir, 'dl');
+    fs.mkdirSync(dlDir, { recursive: true });
+    const cookieFile = biliCookiesFile && fs.existsSync(biliCookiesFile) ? biliCookiesFile : '';
+    const args = ['--ffmpeg-location', path.dirname(ffmpeg),
+      ...buildBiliDlpArgs({ cookieFile, maxDownload, outTemplate: path.join(dlDir, 'media.%(ext)s'), url })];
+    const dl = await run(ytdlp, args, 180_000);
+    if (!dl.ok) {
+      const apiMsg = String(apiError?.message ?? apiError).slice(0, 160);
+      const dlpMsg = String(dl.stderr || '').replace(/\s+/g, ' ').slice(0, 200);
+      const hint = /412/.test(dlpMsg)
+        ? '（412 = B 站网页风控，机房 IP 常被拦；API 通道正常时不需要访问网页）'
+        : '';
+      return {
+        ok: false,
+        error: `B 站下载失败。\nAPI（试了 ${apiAttempts} 次）：${apiMsg}\nyt-dlp：${dlpMsg}${hint}`,
+        apiAttempts
+      };
+    }
+    const names = fs.readdirSync(dlDir).map((n) => path.join(dlDir, n));
+    const file = pickVideoFile(names);
+    return file
+      ? { ok: true, file, source: 'yt-dlp', apiAttempts }
+      : { ok: false, error: '下载后没找到视频文件（yt-dlp 成功但产物缺失）' };
   }
 
   return { run, probeMedia, sceneCandidates, buildVideoGrid, buildVideoGridChunks, planChunks, fillTimes, downloadDirect, downloadBili, biliApiInfo, bili, ffmpeg, ffprobe, ytdlp };

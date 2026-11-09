@@ -309,6 +309,24 @@ export SHARP_MODULE=/path/to/node_modules/sharp
 
 ## 遇到问题
 
+### B 站下载失败 / 412
+
+下载走两条通道：**官方 API**（首选，不需要访问网页）→ **yt-dlp**（兜底，要抓网页）。
+
+- API 失败会**自动重试一次**（间隔 1 秒）；多数情况下重试就成功
+- 两条都失败时，报错会把两边的失败原因分开列出来，例如：
+
+```
+B 站下载失败。
+API（试了 2 次）：<reason>
+yt-dlp：HTTP Error 412: Precondition Failed（412 = B 站网页风控，机房 IP 常被拦；API 通道正常时不需要访问网页）
+```
+
+**看到 412 不等于 API 坏了**——它只是网页通道被拦，API 通道通常照常可用。
+如果 API 那行也报 cookie/鉴权错误，检查 `BILI_COOKIES` 指向的文件是否完整（别的进程若直接覆盖写，可能读到半截）。
+
+
+
 先看 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)：按症状查原因和处理方法。
 
 ## 已知限制
