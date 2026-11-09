@@ -86,8 +86,13 @@ async function runGrid(label, file, { want, strategy = 'overview', tileWidth = 2
   if (built.ok && tileWidth) {
     const w = await imageWidth(built.outJpg);
     const cols = want >= 5 ? 3 : 2;
-    const expect = cols * tileWidth;
-    ok(`${label} 网格宽度`, Math.abs(w - expect) <= cols * 8, `实际 ${w}px，预期约 ${expect}px`);
+    // 管线会把 tile 宽度钳到源视频宽度（小视频不放大），断言必须用同一个口径
+    const probe = await pipe.probeMedia(file);
+    const srcW = Number(probe?.streams?.[0]?.width) || tileWidth;
+    const eff = Math.max(64, Math.min(tileWidth, srcW));
+    const expect = cols * eff;
+    ok(`${label} 网格宽度`, Math.abs(w - expect) <= cols * 8,
+      `实际 ${w}px，预期约 ${expect}px（tile ${tileWidth} 钳到源宽 ${srcW} 后为 ${eff}）`);
   }
   return built;
 }
