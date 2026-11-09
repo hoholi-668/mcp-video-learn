@@ -274,3 +274,40 @@ npm run selftest:mcp        # MCP 协议层（需要依赖已装）
 ## 许可
 
 MIT © 2026 HOHOLI
+
+## 兼容范围
+
+| 项 | 要求 | 实测情况 |
+|---|---|---|
+| **操作系统** | Linux / Windows / macOS | Linux ✅ 全测；Windows 🟡 单测通过、媒体矩阵未测；macOS ⬜ 未测 |
+| **Node.js** | `>= 20` | 20 / 22 / 24 都跑过单测；CI 覆盖 20、22 |
+| **ffmpeg** | `>= 4.4` | 4.4.2（Ubuntu 22.04）、CI 最新版都通过（自动适配 `-fps_mode` / `-vsync`） |
+| **ffprobe** | 随 ffmpeg | 同上 |
+| **yt-dlp** | 可选 | 只有 B 站网页被 412 时才需要兜底 |
+| **sharp** | 可选 | 只有动图 WebP 需要；没有会明确报错 |
+
+### AI 客户端（Harness）
+
+标准 MCP stdio 服务，不绑定某个客户端：
+
+| 客户端 | 状态 |
+|---|---|
+| DSH 0.1.x / 0.2.x | ✅ 实测（`@deepseek-ai/dsh-mcp-client`） |
+| Claude Desktop / Cursor / Cline | 🟡 推断可用（标准 stdio），未实测 |
+| 纯 CLI 客户端 | 🟡 能调工具，但**图片可能被丢弃**，只剩文字元信息 |
+
+> `media_frames` 返回的是 base64 图片。客户端不支持 image content 时，你只能看到
+> 「尺寸 / 帧数 / 取帧方式」，看不到九宫格——工具没错，是显示层差异。
+
+### 平台注意
+
+- **Windows**：`VIDEO_ALLOW_ROOTS` 用**分号**分隔，例如 `C:\videos;D:\clips`
+- **ffmpeg 路径**：可用 `VIDEO_FFMPEG` 指到绝对路径（兼容 `ffmpeg.exe`）
+- **macOS**：代码无平台专属逻辑，但**没实测过**
+
+### 自测你的环境
+
+```bash
+node --test                              # 单测（20 项）
+node scripts/selftest-matrix.mjs /tmp/m   # 媒体矩阵（需要 ffmpeg，68 项）
+```
