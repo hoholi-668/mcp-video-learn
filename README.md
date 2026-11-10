@@ -6,6 +6,8 @@
 [![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
+> **和 IM 网关无关**：输入是「文件路径 / 媒体 URL / B 站链接」，不依赖 SnowLuma、NapCat 这类网关，也不依赖 QQ 协议。谁给它的都一样处理。
+
 模型只认识文本和图片。你丢一个视频链接过去，它通常只读到网页标题；丢一个表情包，它只看到文件名。
 这个 MCP 服务把「视频 / 动图 / 图片」统一变成**模型一次就能读完的东西**：一张按画面变化抽帧拼成的网格图，
 加上能拿到的字幕文本。
@@ -270,6 +272,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 | 单元 | `npm test` | 队列语义、分段规划、URL 校验、网格计算 | **25/25** |
 | 真实媒体矩阵 | `npm run selftest:matrix` | mp4/gif/webp/png、1s~40s、横竖屏、frames 1~12、tileWidth 64~640、坏文件、白名单 | **68/68** |
 | MCP 协议 | `npm run selftest:mcp` | 真实拉起服务、列工具、调工具、拒非法输入、真实 B 站 watch | **8/8** |
+| 跨平台 | GitHub Actions | ubuntu-latest × Node 20/22 + **windows-latest** × Node 22 | **全部通过** |
 
 **性能（服务器实测）**：5 分钟 640×360 视频，场景检测 **3.1 秒**，出图 **9.2 秒**。
 **B 站真实视频**：3 分 33 秒 MV，下载 10 MB / 10.5 秒，9 帧网格 + 522 字字幕。
@@ -295,7 +298,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 
 | 项 | 要求 | 实测情况 |
 |---|---|---|
-| 操作系统 | Linux / Windows / macOS | Linux ✅ 全测；Windows 🟡 单测通过、矩阵未测；macOS ⬜ |
+| 操作系统 | Linux / Windows / macOS | Linux ✅ 全测；Windows ✅ **CI 实测（媒体矩阵 68 项通过）**；macOS ⬜ |
 | Node.js | `>= 20` | 20 / 22 / 24；CI 覆盖 20、22 |
 | ffmpeg | `>= 4.4` | 4.4.2 与最新版都通过（自动适配 `-fps_mode` / `-vsync`） |
 | yt-dlp | 可选 | 只有 B 站 API 失败才用 |
