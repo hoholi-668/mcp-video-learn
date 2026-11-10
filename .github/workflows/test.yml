@@ -8,11 +8,16 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node: [20, 22]
+        exclude:
+          # Windows 只跑 Node 22：Windows runner 启动慢，跑一份够证明跨平台
+          - os: windows-latest
+            node: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -20,26 +25,42 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      - name: 装 ffmpeg
+      - name: 装 ffmpeg（Linux）
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           ffmpeg -version | head -1
 
+      - name: 装 ffmpeg（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          # choco 的 shim 目录写进后续步骤的 PATH
+          "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $env:Path = "C:\ProgramData\chocolatey\bin;$env:Path"
+          ffmpeg -version | Select-Object -First 1
+
       - name: 装依赖
         run: npm install --no-audit --no-fund
 
       - name: 环境信息
+        shell: pwsh
         run: |
           node -v
-          ffmpeg -version | head -1
+          ffmpeg -version | Select-Object -First 1
+          Write-Output "platform=$($env:RUNNER_OS)"
 
       - name: 单元测试
         run: npm test
 
       # 全用 ffmpeg 合成的测试素材，不联网、不需要真实视频
       - name: 真实媒体矩阵
-        run: node scripts/selftest-matrix.mjs /tmp/matrix
+        shell: pwsh
+        run: |
+          $tmp = if ($env:RUNNER_OS -eq 'Windows') { Join-Path $env:RUNNER_TEMP 'matrix' } else { '/tmp/matrix' }
+          node scripts/selftest-matrix.mjs "$tmp"
 
       # 说明：MCP 协议层测试里有一步会访问 api.bilibili.com，
       # CI 环境（海外机房 IP）大概率被 412，所以这里不跑，留给本地/服务器。
