@@ -120,6 +120,8 @@ Step-by-step walkthrough: [docs/quickstart-dsh.md](docs/quickstart-dsh.md).
 
 ![Claude Desktop result](docs/images/claude-desktop.png)
 
+![Cline in VS Code: the tool is called, images arrive as text](docs/images/cline-vscode.png)
+
 ## Known limits
 
 - No audio transcription — subtitles only when the platform provides them.
@@ -474,7 +476,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 | Cursor | 🟡 未实测（走标准 stdio，预期与 Claude Desktop 一致） |
 | 纯 CLI 客户端 | 🟡 能调工具，但**图片可能被丢弃** |
 
-![Claude Desktop 实测](docs/images/claude-desktop.png)
+![Cline 在 VS Code 里的运行证据：工具被调用、图片以文本形式返回](docs/images/cline-vscode.png)
 
 **平台注意**：Windows 下 `VIDEO_ALLOW_ROOTS` 用**分号**分隔；`VIDEO_FFMPEG` 可指绝对路径（兼容 `ffmpeg.exe`）。
 
