@@ -46,7 +46,10 @@ export function makePipeline({
   const biliCookieHeader = String(process.env.BILI_COOKIE || '');
   // 官方 API 通道：机房 IP 也能用（不抓网页），优先于 yt-dlp
   const bili = makeBiliApi({ cookiesFile: biliCookiesFile, cookieHeader: biliCookieHeader, maxBytes: maxDownload });
-  const ffprobe = ffmpeg.replace(/ffmpeg(\.exe)?$/i, (m) => m.replace(/ffmpeg/i, 'ffprobe'));
+  // ffprobe 默认按 ffmpeg 同目录推导；但 Windows 上常见「ffmpeg 是静态版、ffprobe 是
+  // 另一个软件自带的动态版（依赖同目录 DLL）」——所以允许 VIDEO_FFPROBE 单独指定。
+  const ffprobe = process.env.VIDEO_FFPROBE
+    || ffmpeg.replace(/ffmpeg(\.exe)?$/i, (m) => m.replace(/ffmpeg/i, 'ffprobe'));
 
   // ffmpeg 5.1+ 用 -fps_mode，4.x 只认 -vsync（实测 Ubuntu 22.04 自带 4.4 会报
   // "Unrecognized option 'fps_mode'"）。这里探测一次，避免每帧都试错。

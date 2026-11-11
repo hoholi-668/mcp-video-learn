@@ -1,20 +1,131 @@
 # mcp-video-learn
 
-> 让大模型**真的"看"**视频和动图：不是均匀切 9 刀，而是在「画面真的变了」的地方取帧。
+<p>
+  <a href="https://www.npmjs.com/package/mcp-video-learn"><img alt="npm" src="https://img.shields.io/badge/npm-not%20published-lightgrey?style=flat-square"></a>
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square">
+  <img alt="node" src="https://img.shields.io/badge/node-%3E%3D20-4b6fff?style=flat-square">
+  <img alt="ffmpeg" src="https://img.shields.io/badge/ffmpeg-%3E%3D4.4-2f6f4f?style=flat-square">
+</p>
 
-[![CI](https://img.shields.io/github/actions/workflow/status/hoholi-668/mcp-video-learn/test.yml?branch=main&label=CI)](https://github.com/hoholi-668/mcp-video-learn/actions)
-[![node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+**English** · [中文文档](#中文文档)
 
-> **和 IM 网关无关**：输入是「文件路径 / 媒体 URL / B 站链接」，不依赖 SnowLuma、NapCat 这类网关，也不依赖 QQ 协议。谁给它的都一样处理。
-
-模型只认识文本和图片。你丢一个视频链接过去，它通常只读到网页标题；丢一个表情包，它只看到文件名。
-这个 MCP 服务把「视频 / 动图 / 图片」统一变成**模型一次就能读完的东西**：一张按画面变化抽帧拼成的网格图，
-加上能拿到的字幕文本。
+> **Give your model eyes for video.** A local MCP server that turns a video (or a GIF) into a
+> scene-aware contact sheet plus subtitles — so the model can actually *see* what happens,
+> instead of reading a title and guessing.
+>
+> **No IM gateway required.** Input is a file path, a media URL, or a Bilibili link.
+> Works with Claude Desktop, DSH, Cursor — any MCP client that renders images.
 
 ---
 
-## 这套插件
+## Why it exists
+
+Models can't watch videos. Feed one a link and it usually gets a page title; feed it a GIF and
+it sees a filename. This server does the boring part properly:
+
+- **Scene-change sampling**, not "9 evenly spaced frames" — a red→green cut is caught even though
+  the luma barely changes (ffmpeg's `select=gt(scene,…)` only compares luma, so it misses it).
+- **Tiled contact sheets** — 3×3 grids the model can read in one glance, chunked for long videos.
+- **Subtitles when available** — the picture shows *what*, the transcript shows *why*.
+
+## Install
+
+```bash
+# 1. ffmpeg must be on PATH (or set VIDEO_FFMPEG)
+ffmpeg -version
+
+# 2. clone & install
+git clone https://github.com/hoholi-668/mcp-video-learn.git
+cd mcp-video-learn
+npm install --omit=optional   # sharp is optional (WebP/AVIF only)
+
+# 3. smoke test
+node src/index.js             # prints "ready" then waits on stdio
+```
+
+## Connect it
+
+### Claude Desktop
+
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "video-learn": {
+      "command": "node",
+      "args": ["/absolute/path/mcp-video-learn/src/index.js"],
+      "env": {
+        "VIDEO_ALLOW_ROOTS": "/Users/me/Videos:/Users/me/Desktop",
+        "VIDEO_FFMPEG": "/opt/homebrew/bin/ffmpeg"
+      }
+    }
+  }
+}
+```
+
+Windows: use absolute paths with escaped backslashes and `;` between roots.
+
+### DSH
+
+```yaml
+- id: mcp-video-learn
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: video-learn
+    transport: stdio
+    command: node
+    args: ['/absolute/path/mcp-video-learn/src/index.js']
+```
+
+Step-by-step walkthrough: [docs/quickstart-dsh.md](docs/quickstart-dsh.md).
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `media_frames` | Video / GIF / local file / URL → tiled contact sheet(s) |
+| `bili_video_watch` | Bilibili link → grid + subtitles (official API, works from datacenter IPs) |
+| `bili_video_info` | Title / uploader / duration / subtitle availability — decide before watching |
+| `bili_search` | Search by title when you only have a name |
+
+## Configuration
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `VIDEO_ALLOW_ROOTS` | temp dirs only | `:` (Linux/macOS) or `;` (Windows) separated roots allowed for local files |
+| `VIDEO_FFMPEG` | `ffmpeg` | ffmpeg executable |
+| `VIDEO_FFPROBE` | derived from ffmpeg | ffprobe executable (needed on Windows when ffprobe ships with different DLLs) |
+| `BILI_COOKIES` | — | Netscape cookie file for Bilibili |
+| `BILI_COOKIE` | — | raw cookie header instead of a file |
+| `SHARP_MODULE` | bundled | path to a `sharp` module for WebP/AVIF |
+
+## Verified
+
+| What | Where | Result |
+|---|---|---|
+| Unit tests | Node 20 / 22 / 24 | 25 passing |
+| Real media matrix (68 cases) | Linux + **Windows** (GitHub Actions) | all passing |
+| Claude Desktop | Windows 11, 2026-11-11 | video described correctly from the grid |
+
+![Claude Desktop result](docs/images/claude-desktop.png)
+
+## Known limits
+
+- No audio transcription — subtitles only when the platform provides them.
+- ffmpeg 4.4+ (older builds may lack `tblend`/`signalstats`).
+- Bilibili occasionally risk-controls datacenter IPs; the server falls back between API and yt-dlp.
+- Local files must be under `VIDEO_ALLOW_ROOTS`.
+
+## License
+
+MIT
+
+---
+
+# 中文文档
+
+### 这套插件
 
 | 插件 | 作用 | 依赖 |
 |---|---|---|
@@ -26,7 +137,7 @@
 
 > 除 qzone 外，其余插件都不依赖任何 IM 网关——任何 MCP 客户端（DSH / Claude / Cursor）都能直接接。
 
-## 它解决什么问题
+### 它解决什么问题
 
 | 痛点 | 主流做法 | 这里的做法 |
 |---|---|---|
@@ -40,7 +151,7 @@
 
 > **第一次接 DSH？** 看 [10 分钟接入指南](docs/quickstart-dsh.md)——从零到看见视频。
 
-## 30 秒上手
+### 30 秒上手
 
 ```bash
 # 1. 依赖：ffmpeg 必须在 PATH 里
@@ -85,7 +196,7 @@ node src/index.js
 
 ---
 
-## 四个工具
+### 四个工具
 
 | 工具 | 做什么 | 输入 |
 |---|---|---|
@@ -106,9 +217,9 @@ node src/index.js
 
 ---
 
-## 核心机制（这是它和"均匀切 9 帧"的区别）
+### 核心机制（这是它和"均匀切 9 帧"的区别）
 
-### 1. 场景变化检测：不用 ffmpeg 自带的 `select=scene`
+#### 1. 场景变化检测：不用 ffmpeg 自带的 `select=scene`
 
 ffmpeg 的 `select=gt(scene,…)` **只比较亮度**。实测：红→绿这种「亮度几乎不变、色相差很多」的切换，
 3 段纯色视频只抓到 1 个切点。
@@ -127,7 +238,7 @@ fps=5, scale=160 → 实测 12 秒降到 2 秒
 0.2 秒内的相邻峰合并成一个切点
 ```
 
-### 2. FIFO 队列：只收"画面真的变了"的帧
+#### 2. FIFO 队列：只收"画面真的变了"的帧
 
 ```
 画面进来 → 变化分够高才入队 → 队满淘汰最旧 → 最终快照就是网格内容
@@ -145,7 +256,7 @@ fps=5, scale=160 → 实测 12 秒降到 2 秒
 
 拿不到变化点时（纯色、极短片段）自动退回均匀采样，返回文本会标明 `mode=scene` / `mode=uniform`。
 
-### 3. 分段九宫格：长视频一次给多段
+#### 3. 分段九宫格：长视频一次给多段
 
 单张图只覆盖 9 个瞬间。10 分钟视频里大部分内容根本没被看到。
 
@@ -171,12 +282,12 @@ media_frames("D:/clips/lecture.mp4", frames=9, chunks=3)
 | `frames` | 9 | **每段**几帧（1~12） |
 | `tileWidth` | 400 | 每帧宽度；**会自动钳到源视频宽度**，小视频不放大 |
 
-### 4. 字幕：补上画面之外的信息
+#### 4. 字幕：补上画面之外的信息
 
 B 站视频会走 API 拿字幕列表并下载，转成纯文本附在结果里。
 **九宫格听不到台词，字幕能。**
 
-### 5. 只有标题没有链接？搜
+#### 5. 只有标题没有链接？搜
 
 QQ/微信分享视频经常只来一张小程序卡片——只有标题和封面，没有地址
 （`m.q.qq.com/a/s/...` 是小程序协议，抓不到 bvid）。
@@ -192,7 +303,7 @@ QQ/微信分享视频经常只来一张小程序卡片——只有标题和封�
 
 ---
 
-## 支持哪些格式
+### 支持哪些格式
 
 | 格式 | 能不能看 | 需要额外装东西吗 |
 |---|---|---|
@@ -213,7 +324,7 @@ export SHARP_MODULE=/path/to/node_modules/sharp
 
 ---
 
-## B 站：走官方 API，机房 IP 也能用
+### B 站：走官方 API，机房 IP 也能用
 
 云服务器抓 `www.bilibili.com` 会被 **412** 拦（cookie 也救不了，拦的是网页请求）。所以这里不抓网页：
 
@@ -246,7 +357,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 
 ---
 
-## 配置项
+### 配置项
 
 全部走环境变量，没有配置文件：
 
@@ -266,7 +377,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 
 ---
 
-## 安全边界
+### 安全边界
 
 | 措施 | 目的 |
 |---|---|
@@ -279,7 +390,12 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 
 ---
 
-## 实测数据
+### 实测数据
+
+**在 Claude Desktop 里实测（2026-11-11）**：装好 MCP 后让它看一段 3 秒测试视频，
+它准确报出「0~0.8s 红、0.8~1.6s 绿、1.6~3s 蓝」——说明九宫格真的进了模型的眼睛。
+
+![Claude Desktop 调用 media_frames 的结果](docs/images/claude-desktop.png)
 
 | 层 | 命令 | 覆盖 | 结果 |
 |---|---|---|---|
@@ -293,7 +409,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 
 ---
 
-## 踩坑记录（写给后来的人）
+### 踩坑记录（写给后来的人）
 
 | 现象 | 根因 | 修法 |
 |---|---|---|
@@ -308,7 +424,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 
 ---
 
-## 兼容范围
+### 兼容范围
 
 | 项 | 要求 | 实测情况 |
 |---|---|---|
@@ -330,7 +446,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 
 ---
 
-## 自测与开发
+### 自测与开发
 
 ```bash
 node --test                                # 单测 25 项
@@ -354,7 +470,7 @@ test/              node:test
 
 ---
 
-## 已知限制
+### 已知限制
 
 - **动图 WebP** 需要 sharp 或 ffmpeg ≥ 6.x
 - **B 站**：API 默认约 480p；更高清晰度/会员内容需要登录 cookie
@@ -362,6 +478,6 @@ test/              node:test
 - 字幕只反映台词/讲解；纯音乐视频拿不到内容
 - 只读：不下载到用户目录、不上传、不发布
 
-## 许可
+### 许可
 
 MIT © 2026 HOHOLI
