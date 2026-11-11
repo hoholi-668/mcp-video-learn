@@ -119,6 +119,26 @@ Step-by-step walkthrough: [docs/quickstart-dsh.md](docs/quickstart-dsh.md).
 - Bilibili occasionally risk-controls datacenter IPs; the server falls back between API and yt-dlp.
 - Local files must be under `VIDEO_ALLOW_ROOTS`.
 
+## FAQ
+
+**Does it cost a lot of tokens?**
+Frames are rendered locally; one call returns 1–6 images. Token cost is roughly "how many images you ask for", not video length.
+
+**What about long videos?**
+Default is 9 frames. Use `chunks: 1–6` to get one grid per segment instead of squashing everything into one sheet.
+
+**Why not ffmpeg's `select=gt(scene,…)`?**
+It only compares luma. A red→green cut has almost identical luma, so it is missed. This project uses `tblend` + `signalstats` (Y/U/V max) instead.
+
+**Bilibili returns 412?**
+Datacenter IPs get risk-controlled. The server uses the official API first and falls back to yt-dlp; a cookie file (`BILI_COOKIES`) improves success rate.
+
+**The client shows no image?**
+The client must support MCP image content. Plain CLI clients usually drop images.
+
+**Windows has no ffmpeg?**
+Set `VIDEO_FFMPEG` (and `VIDEO_FFPROBE` if ffprobe ships with different DLLs).
+
 ## License
 
 MIT
@@ -487,3 +507,23 @@ test/              node:test
 ### 许可
 
 MIT © 2026 HOHOLI
+
+### FAQ
+
+**会不会很费 token？**
+帧在本地渲染，一次只回 1~6 张图；消耗取决于你要几张，不取决于视频多长。
+
+**长视频怎么办？**
+默认 9 帧；用 `chunks: 1~6` 按段落各给一张网格。
+
+**为什么不用 ffmpeg 自带的 `select=gt(scene,…)`？**
+它只比亮度，红→绿这种亮度几乎一样的切换会漏检；本项目用 `tblend` + `signalstats`（Y/U/V 三通道）。
+
+**B 站返回 412？**
+机房 IP 被风控。先走官方 API，失败回退 yt-dlp；配 `BILI_COOKIES` 成功率更高。
+
+**客户端看不到图？**
+客户端必须支持 MCP 图片内容；纯 CLI 客户端通常会丢弃。
+
+**Windows 没有 ffmpeg？**
+设 `VIDEO_FFMPEG`；ffprobe 依赖 DLL 时再设 `VIDEO_FFPROBE`。
