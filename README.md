@@ -14,6 +14,18 @@
 
 ---
 
+## 这套插件
+
+| 插件 | 作用 | 依赖 |
+|---|---|---|
+| [mcp-video-learn](https://github.com/hoholi-668/mcp-video-learn) | 视频 / 动图 → 九宫格 + 字幕 | ffmpeg |
+| [mcp-roster](https://github.com/hoholi-668/mcp-roster) | 人物名册与权限（默认拒绝） | 无 |
+| [conversation-pacing](https://github.com/hoholi-668/conversation-pacing) | 群聊发言节奏：什么时候说、说给谁 | 无 |
+| [dsh-qq-persona](https://github.com/hoholi-668/dsh-qq-persona) | 「不像客服」的人格模板 | 无 |
+| [mcp-qzone-safe](https://github.com/hoholi-668/mcp-qzone-safe) | QQ 空间操作（**需要 OneBot 网关，存量环境**） | OneBot 网关 |
+
+> 除 qzone 外，其余插件都不依赖任何 IM 网关——任何 MCP 客户端（DSH / Claude / Cursor）都能直接接。
+
 ## 它解决什么问题
 
 | 痛点 | 主流做法 | 这里的做法 |
@@ -25,6 +37,8 @@
 | 动图 WebP 只出第一帧 | 放弃 | **sharp 逐帧解码** |
 
 ---
+
+> **第一次接 DSH？** 看 [10 分钟接入指南](docs/quickstart-dsh.md)——从零到看见视频。
 
 ## 30 秒上手
 
