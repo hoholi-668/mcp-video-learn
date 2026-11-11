@@ -43,6 +43,13 @@ npm install --omit=optional   # sharp is optional (WebP/AVIF only)
 node src/index.js             # prints "ready" then waits on stdio
 ```
 
+```bash
+npx -y mcp-video-learn
+```
+
+or install globally / point your MCP client at the `bin` above.
+
+
 ## Connect it
 
 ### Claude Desktop
