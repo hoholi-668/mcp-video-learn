@@ -115,7 +115,7 @@ Step-by-step walkthrough: [docs/quickstart-dsh.md](docs/quickstart-dsh.md).
 | Unit tests | Node 20 / 22 / 24 | 25 passing |
 | Real media matrix (68 cases) | Linux + **Windows** (GitHub Actions) | all passing |
 | Claude Desktop | Windows 11, 2026-11-11 | video described correctly from the grid |
-| Cline (VS Code) | Windows 11, 2026-11-11 | tool call works; images arrive as base64 text on OpenAI-compatible providers (Cline-side limitation) |
+| Cline (VS Code) | Windows 11, 2026-11-11 | tool call works; images arrive as base64 text on OpenAI-compatible providers (Cline-side limitation) — [screenshot](docs/images/cline-vscode.png) |
 | Cursor | — | not tested yet (standard stdio) |
 
 ![Claude Desktop result](docs/images/claude-desktop.png)
@@ -470,7 +470,7 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 |---|---|
 | DSH 0.1.x / 0.2.x | ✅ 实测 |
 | **Claude Desktop** | ✅ **实测（2026-11-11，Windows）**：能看图并准确复述画面变化，见下方截图 |
-| **Cline（VS Code）** | ✅ **工具调用实测（2026-11-11）**：media_frames 被正确调用；🟡 OpenAI 兼容通道下图片会被转成 base64 文本，模型看不到画面（Cline 侧限制） |
+| **Cline（VS Code）** | ✅ **工具调用实测（2026-11-11）**：media_frames 被正确调用（[截图](docs/images/cline-vscode.png)）；🟡 OpenAI 兼容通道下图片会被转成 base64 文本，模型看不到画面（Cline 侧限制） |
 | Cursor | 🟡 未实测（走标准 stdio，预期与 Claude Desktop 一致） |
 | 纯 CLI 客户端 | 🟡 能调工具，但**图片可能被丢弃** |
 
