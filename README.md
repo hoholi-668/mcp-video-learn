@@ -107,6 +107,7 @@ Step-by-step walkthrough: [docs/quickstart-dsh.md](docs/quickstart-dsh.md).
 | Unit tests | Node 20 / 22 / 24 | 25 passing |
 | Real media matrix (68 cases) | Linux + **Windows** (GitHub Actions) | all passing |
 | Claude Desktop | Windows 11, 2026-11-11 | video described correctly from the grid |
+| Cursor / Cline | — | not tested yet (same stdio transport) |
 
 ![Claude Desktop result](docs/images/claude-desktop.png)
 
@@ -439,8 +440,11 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 | 客户端 | 状态 |
 |---|---|
 | DSH 0.1.x / 0.2.x | ✅ 实测 |
-| Claude Desktop / Cursor / Cline | 🟡 推断可用（标准 stdio），未实测 |
+| **Claude Desktop** | ✅ **实测（2026-11-11，Windows）**：能看图并准确复述画面变化，见下方截图 |
+| Cursor / Cline | 🟡 未实测（同样走标准 stdio，理论上与 Claude Desktop 一致） |
 | 纯 CLI 客户端 | 🟡 能调工具，但**图片可能被丢弃** |
+
+![Claude Desktop 实测](docs/images/claude-desktop.png)
 
 **平台注意**：Windows 下 `VIDEO_ALLOW_ROOTS` 用**分号**分隔；`VIDEO_FFMPEG` 可指绝对路径（兼容 `ffmpeg.exe`）。
 
