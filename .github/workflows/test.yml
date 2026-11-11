@@ -12,7 +12,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # 固定 ubuntu-22.04：ubuntu-latest 已切到 26.04，apt 源偶发 DNS 失败（实测 2026-11-11 连续 5 次）
+        os: [ubuntu-22.04, windows-latest]
         node: [20, 22]
         exclude:
           # Windows 只跑 Node 22：Windows runner 启动慢，跑一份够证明跨平台
@@ -28,8 +29,25 @@ jobs:
       - name: 装 ffmpeg（Linux）
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          # apt 源偶发 DNS 失败（security.ubuntu.com / archive.ubuntu.com），重试 3 次
+          ok=0
+          for i in 1 2 3; do
+            if sudo apt-get update -o Acquire::Retries=3 \
+              && sudo apt-get install -y ffmpeg -o Acquire::Retries=3; then
+              ok=1
+              break
+            fi
+            echo "apt 失败（第 $i 次），5 秒后重试"
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "apt 三次都失败；改用静态 ffmpeg 兜底"
+            curl -fsSL -o /tmp/ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+            tar -xJf /tmp/ffmpeg.tar.xz -C /tmp
+            sudo cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /usr/local/bin/ffmpeg
+            sudo cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/ffprobe
+            sudo chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+          fi
           ffmpeg -version | head -1
 
       - name: 装 ffmpeg（Windows）
