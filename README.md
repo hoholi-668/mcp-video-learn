@@ -1,4 +1,5 @@
 # mcp-video-learn
+[![npm](https://img.shields.io/npm/v/mcp-video-learn.svg)](https://www.npmjs.com/package/mcp-video-learn)
 
 <p>
   <a href="https://www.npmjs.com/package/mcp-video-learn"><img alt="npm" src="https://img.shields.io/badge/npm-not%20published-lightgrey?style=flat-square"></a>
