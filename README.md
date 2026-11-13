@@ -123,6 +123,25 @@ Step-by-step walkthrough: [docs/quickstart-dsh.md](docs/quickstart-dsh.md).
 
 ![Cline in VS Code: the tool is called, images arrive as text](docs/images/cline-vscode.png)
 
+## Two kinds of "vision plugins"
+
+Worth knowing before you install one — they are not interchangeable:
+
+| Type | What it returns | Needs a vision model? | Cost |
+|---|---|---|---|
+| **Pass-through** (this project) | the actual images, plus metadata text | **Yes** — the client must render image content and the model must see it | no extra model call |
+| **Captioning** | a text description produced by an internal vision model / OCR | No — a text-only model can use it | one extra model call per request, and the description loses detail |
+
+This project is **pass-through on purpose**: pixels are more faithful than any caption,
+and you don't pay twice. The trade-off is explicit:
+
+- a client that drops image content (plain CLI, some OpenAI-compatible setups) will only
+  receive the metadata text — see the Cline screenshot above;
+- a text-only model cannot use it at all.
+
+**If your setup is text-only**, reach for a captioning server (or run a VLM yourself and
+feed the text in). **If your model can see**, pass-through gives it the real frames.
+
 ## Known limits
 
 - No audio transcription — subtitles only when the platform provides them.
@@ -506,6 +525,21 @@ test/              node:test
 遇到问题先看 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。
 
 ---
+
+### 视觉插件的两种类型（装之前先分清）
+
+| 类型 | 返回什么 | 需要视觉模型吗 | 成本 |
+|---|---|---|---|
+| **透传型**（本项目） | **真实图片** + 元信息文本 | **需要**：客户端要能渲染图片、模型要能看图 | 不额外调模型 |
+| **转述型** | 内部用 VLM/OCR 生成的一段**文字描述** | 不需要，纯文本模型也能用 | 每次多一次模型调用，描述有损 |
+
+本项目**刻意选透传**：像素比任何转述都保真，而且不重复付费。代价写清楚：
+
+- 客户端丢图片（纯 CLI、部分 OpenAI 兼容配置）时，只能收到元信息文本——见上面 Cline 的截图；
+- 纯文本模型完全用不了。
+
+**如果你的环境只有文本模型**，请用转述型插件（或自己跑一个 VLM，把文字喂进来）；
+**如果模型能看图**，透传型才能让它看到真正的画面。
 
 ### 已知限制
 
