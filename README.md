@@ -8,6 +8,14 @@
   <img alt="ffmpeg" src="https://img.shields.io/badge/ffmpeg-%3E%3D4.4-2f6f4f?style=flat-square">
 </p>
 
+<p align="center">
+  <a href="https://www.bilibili.com/video/BV1M7WB6UEXH/"><img alt="Watch the intro video on Bilibili" src="https://img.shields.io/badge/%E2%96%B6%20%E8%A7%86%E9%A2%91%E4%BB%8B%E7%BB%8D-B%E7%AB%99-00A1D6?style=for-the-badge"></a>
+</p>
+
+> 🎬 **视频介绍（B 站，3:47）**：[鱼的脑白金：让 AI 不仅能看到也能看懂视频的集成插件](https://www.bilibili.com/video/BV1M7WB6UEXH/)
+>
+> 作者亲自讲解：为什么要做它、九宫格怎么工作、在 Claude Desktop / DSH 里怎么用。
+
 **English** · [中文文档](#中文文档)
 
 > **Give your model eyes for video.** A local MCP server that turns a video (or a GIF) into a
