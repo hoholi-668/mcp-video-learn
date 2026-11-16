@@ -156,6 +156,20 @@ plus subtitles when the platform provides them.
 
 ![Cline in VS Code: the tool is called, images arrive as text](docs/images/cline-vscode.png)
 
+
+**How many frames should you ask for?**
+
+| Video length | Recommended | Why |
+|---|---|---|
+| < 3 min | `chunks=1, frames=9` | one grid already covers it |
+| 3–10 min | `chunks=3, frames=9` (27 frames) | beginning / middle / end |
+| > 10 min | `chunks=6, frames=9` (54 frames) | dense enough without tiny tiles |
+
+Hard ceiling is `frames=12 × chunks=6 = 72` frames per call — but more is not always better:
+12 frames per grid shrinks every tile, so small on-screen text becomes unreadable. If you need to read
+UI text, keep `frames` moderate and raise `tileWidth` (64–640) instead. Each extra grid is also another
+image in the model's context.
+
 ## Two kinds of "vision plugins"
 
 Worth knowing before you install one — they are not interchangeable:
@@ -579,6 +593,19 @@ test/              node:test
 遇到问题先看 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。
 
 ---
+
+
+**该要多少帧？**
+
+| 视频长度 | 推荐 | 理由 |
+|---|---|---|
+| < 3 分钟 | `chunks=1, frames=9` | 一张网格就够 |
+| 3~10 分钟 | `chunks=3, frames=9`（27 帧） | 开头 / 中段 / 结尾各一张 |
+| > 10 分钟 | `chunks=6, frames=9`（54 帧） | 覆盖足够，格子还不至于太小 |
+
+硬上限是 `frames=12 × chunks=6 = 72` 帧/次——但不是越多越好：每张 12 帧会让每格变小，
+屏幕上的小字会糊。**要看清界面文字，应该少抽几帧、把 `tileWidth` 调大（64–640）**，
+而不是拉满帧数。另外每多一张网格，就多一张图进模型上下文。
 
 ### 视觉插件的两种类型（装之前先分清）
 
