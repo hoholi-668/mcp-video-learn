@@ -105,6 +105,31 @@ Step-by-step walkthrough: [docs/quickstart-dsh.md](docs/quickstart-dsh.md).
 | `bili_video_info` | Title / uploader / duration / subtitle availability — decide before watching |
 | `bili_search` | Search by title when you only have a name |
 
+## What one call actually returns
+
+People install it, call once, see a single 3×3 grid and assume that's all it does. It isn't —
+visual coverage is controlled by two parameters:
+
+| Parameter | Default | Range | Effect |
+|---|---|---|---|
+| `frames` | 9 | 4–12 | frames per grid |
+| `chunks` | 1 | 1–6 | split the video into N segments, **one grid per segment** |
+
+So `frames=9, chunks=3` returns **3 grids / 27 frames** covering the beginning, middle and end.
+One grid is the *default*, not the limit.
+
+Every call also returns text: title, uploader, duration, download source and size, frame count —
+plus subtitles when the platform provides them.
+
+**Two things that are by design, not bugs:**
+
+1. **Only one grid?** Your MCP client may have registered an older/simplified build of this server
+   that exposes `frames` but not `chunks`. Check the tool schema — if `chunks` is missing, that is the
+   client's registration, not a missing feature.
+2. **No subtitles?** Bilibili only returns subtitle tracks when the video has them and (usually) when
+   cookies are configured (`BILI_COOKIE`). This plugin does **not** transcribe audio — a voice-only or
+   music video gives you frames only. That is the pass-through trade-off described above.
+
 ## Configuration
 
 | Env var | Default | Meaning |
@@ -416,6 +441,27 @@ yt-dlp：HTTP Error 412（412 = 网页风控；API 正常时不需要访问网�
 ```
 
 ---
+
+### 一次调用到底返回什么（为什么你可能只看到一张九宫格）
+
+有人装完调一次，看到一张 3×3 网格，就以为插件只能输出这些。不是——画面覆盖由两个参数控制：
+
+| 参数 | 默认 | 范围 | 作用 |
+|---|---|---|---|
+| `frames` | 9 | 4–12 | 每张网格抽几帧 |
+| `chunks` | 1 | 1–6 | 把视频切成 N 段，**每段各出一张网格** |
+
+所以 `frames=9, chunks=3` 会返回 **3 张网格 / 27 帧**，覆盖开头、中段、结尾。
+**一张是默认值，不是上限。**
+
+每次调用除了图片，还会返回文本：标题、UP 主、时长、下载来源与大小、帧数，以及平台提供时的字幕。
+
+**两件「设计如此」的事，不是故障：**
+
+1. **只有一张网格？** 你的 MCP 客户端可能注册的是这个服务的旧版/精简版，只暴露 `frames`、
+   没有 `chunks`。看一下工具的参数表——如果看不到 `chunks`，那是客户端注册的问题，不是插件缺功能。
+2. **没有字幕？** B 站只有在视频本身有字幕轨、且通常要配置 cookies（`BILI_COOKIE`）时才会返回字幕。
+   本插件**不做语音转写**——纯语音/音乐视频只能给画面。这就是上面说的「透传型」取舍。
 
 ### 配置项
 
